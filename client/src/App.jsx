@@ -1,1405 +1,948 @@
-import React from "react";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
 
-const API_BASE = "http://localhost:5000";
+const API_BASE = (
+  import.meta.env.VITE_API_BASE || "http://localhost:5000"
+).replace(/\/$/, "");
 
-const LIVE_STATUSES = [
-  "IN_PLAY",
-  "PAUSED",
-  "EXTRA_TIME",
-  "PENALTY_SHOOTOUT",
+const NAV_ITEMS = [
+  { id: "home", label: "Matches", icon: "⚽" },
+  { id: "live", label: "Live", icon: "🔴" },
+  { id: "leagues", label: "Leagues", icon: "🏆" },
+  { id: "news", label: "News", icon: "📰" },
 ];
 
-const LEAGUE_PRIORITY = [
-  "CL",
-  "PL",
-  "PD",
-  "BL1",
-  "SA",
-  "FL1",
-  "PPL",
-  "DED",
-  "EL",
-  "EC",
-  "WC",
-];
+async function apiRequest(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, options);
+  const data = await response.json().catch(() => ({}));
 
-const TEXT = {
-  en: {
-    home: "Home",
-    live: "Live",
-    matches: "Matches",
-    leagues: "Leagues",
-    search: "Search",
-    loading: "Loading matches...",
-    noMatches: "No matches found",
-    yesterday: "Yesterday",
-    today: "Today",
-    tomorrow: "Tomorrow",
-    liveNow: "LIVE",
-    overview: "Overview",
-    events: "Events",
-    lineups: "Lineups",
-    statistics: "Statistics",
-    standings: "Standings",
-    teams: "Teams",
-    scorers: "Top scorers",
-    back: "Back",
-    goals: "Goals",
-    cards: "Cards",
-    matchEvents: "Match events",
-    noData: "No data available",
-    searchPlaceholder: "Search teams or competitions...",
-    chooseDate: "Choose date",
-    allMatches: "All matches",
-    scheduled: "Scheduled",
-    finished: "Finished",
-    upcoming: "Upcoming",
-    error: "Could not load data",
-    retry: "Try again",
-    played: "Played",
-    won: "Won",
-    drawn: "Drawn",
-    lost: "Lost",
-    points: "Points",
-    goalDifference: "GD",
-    position: "Pos",
-    competition: "Competition",
-    venue: "Venue",
-    matchday: "Matchday",
-    kickOff: "Kick-off",
-    refresh: "Refresh",
-    noLeagues: "No competitions available",
-    noStandings: "Standings are not available for this competition.",
-    noLineups: "Lineups are not provided by this data source for this match.",
-    noStatistics: "Match statistics are not available from this data source.",
-    selectLeague: "Select a competition to view its matches and standings.",
-    language: "አማ",
-    all: "All",
-    matchDetails: "Match details",
-    date: "Date",
-  },
-  am: {
-    home: "መነሻ",
-    live: "ቀጥታ",
-    matches: "ጨዋታዎች",
-    leagues: "ሊጎች",
-    search: "ፈልግ",
-    loading: "ጨዋታዎች በመጫን ላይ...",
-    noMatches: "ምንም ጨዋታዎች አልተገኙም",
-    yesterday: "ትናንት",
-    today: "ዛሬ",
-    tomorrow: "ነገ",
-    liveNow: "ቀጥታ",
-    overview: "አጠቃላይ",
-    events: "ክስተቶች",
-    lineups: "አሰላለፍ",
-    statistics: "ስታቲስቲክስ",
-    standings: "ደረጃዎች",
-    teams: "ቡድኖች",
-    scorers: "ከፍተኛ ግብ አግቢዎች",
-    back: "ተመለስ",
-    goals: "ጎሎች",
-    cards: "ካርዶች",
-    matchEvents: "የጨዋታ ክስተቶች",
-    noData: "መረጃ አልተገኘም",
-    searchPlaceholder: "ቡድኖችን ወይም ሊጎችን ፈልግ...",
-    chooseDate: "ቀን ምረጥ",
-    allMatches: "ሁሉም ጨዋታዎች",
-    scheduled: "የታቀዱ",
-    finished: "የተጠናቀቁ",
-    upcoming: "የሚቀጥሉ",
-    error: "መረጃውን መጫን አልተቻለም",
-    retry: "እንደገና ሞክር",
-    played: "ተጫውቷል",
-    won: "አሸንፏል",
-    drawn: "አቻ",
-    lost: "ተሸንፏል",
-    points: "ነጥብ",
-    goalDifference: "የግብ ልዩነት",
-    position: "ደረጃ",
-    competition: "ውድድር",
-    venue: "ስታዲየም",
-    matchday: "የጨዋታ ቀን",
-    kickOff: "የመጀመሪያ ሰዓት",
-    refresh: "አድስ",
-    noLeagues: "ምንም ውድድሮች አልተገኙም",
-    noStandings: "የዚህ ውድድር ደረጃዎች አይገኙም።",
-    noLineups: "የዚህ ጨዋታ አሰላለፍ አልቀረበም።",
-    noStatistics: "የጨዋታ ስታቲስቲክስ አይገኝም።",
-    selectLeague: "ጨዋታዎችንና ደረጃዎችን ለማየት ውድድር ምረጥ።",
-    language: "EN",
-    all: "ሁሉም",
-    matchDetails: "የጨዋታ ዝርዝር",
-    date: "ቀን",
-  },
-};
+  if (!response.ok || data.success === false) {
+    throw new Error(data.message || `Request failed (${response.status})`);
+  }
 
-function localDateKey(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return data;
 }
 
-function addDays(dateKey, amount) {
-  const date = new Date(`${dateKey}T12:00:00`);
-  date.setDate(date.getDate() + amount);
-  return localDateKey(date);
-}
-
-function formatDate(dateKey, language = "en") {
-  const date = new Date(`${dateKey}T12:00:00`);
-  return new Intl.DateTimeFormat(language === "am" ? "am-ET" : "en-GB", {
-    day: "numeric",
-    month: "short",
-  }).format(date);
-}
-
-function formatFullDate(value, language = "en") {
-  if (!value) return "—";
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-
-  return new Intl.DateTimeFormat(language === "am" ? "am-ET" : "en-GB", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
+function todayString() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Addis_Ababa",
     year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const part = (type) => parts.find((item) => item.type === type)?.value;
+  return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
-function formatKickoff(value, language = "en") {
-  if (!value) return "—";
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-
-  return new Intl.DateTimeFormat(language === "am" ? "am-ET" : "en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+function shiftDate(date, days) {
+  const value = new Date(`${date}T12:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
 }
 
-function isLive(match) {
-  return LIVE_STATUSES.includes(match?.status);
+function formatDate(date, options = {}) {
+  if (!date) return "Date unavailable";
+
+  return new Date(date).toLocaleString("en-GB", {
+    timeZone: "Africa/Addis_Ababa",
+    ...options,
+  });
 }
 
-function getLiveLabel(match, t) {
-  if (match?.status === "PAUSED") return "HT";
-  if (match?.status === "PENALTY_SHOOTOUT") return "PEN";
-  if (match?.status === "EXTRA_TIME") {
-    return match?.minute ? `${match.minute}' ET` : "ET";
+function getStatus(match) {
+  return (
+    match?.state?.description ||
+    match?.state?.status ||
+    match?.status ||
+    "Scheduled"
+  );
+}
+
+function isLiveMatch(match) {
+  const status = getStatus(match).toLowerCase();
+  return (
+    status.includes("live") ||
+    status.includes("in play") ||
+    status.includes("in progress") ||
+    status.includes("1st half") ||
+    status.includes("2nd half") ||
+    status.includes("half time") ||
+    status.includes("halftime") ||
+    status.includes("extra time") ||
+    status.includes("penalties")
+  );
+}
+
+function matchScore(match) {
+  const score = match?.state?.score?.current;
+  const fullTime = match?.score?.fullTime;
+
+  const home = score?.home ?? fullTime?.home;
+  const away = score?.away ?? fullTime?.away;
+
+  if (home == null && away == null) return "vs";
+  return `${home ?? 0} - ${away ?? 0}`;
+}
+
+function normalizeStandings(payload) {
+  if (Array.isArray(payload)) {
+    return payload.flatMap((item) => {
+      if (Array.isArray(item?.standings)) {
+        return item.standings.map((row) => ({
+          ...row,
+          groupName: item.name || item.groupName || "",
+        }));
+      }
+      return [item];
+    });
   }
-  if (match?.minute != null) return `${match.minute}'`;
-  return t.liveNow;
-}
 
-function getScore(match) {
-  const score = match?.score?.fullTime || {};
-  const home = score.home;
-  const away = score.away;
-
-  if (home == null || away == null) {
-    const halfTime = match?.score?.halfTime || {};
-    if (halfTime.home != null && halfTime.away != null) {
-      return `${halfTime.home} - ${halfTime.away}`;
-    }
-    return "—";
-  }
-
-  return `${home} - ${away}`;
-}
-
-function getMatchStatus(match, t) {
-  if (isLive(match)) return getLiveLabel(match, t);
-
-  switch (match?.status) {
-    case "FINISHED":
-      return t.finished;
-    case "SCHEDULED":
-    case "TIMED":
-      return formatKickoff(match?.utcDate);
-    case "POSTPONED":
-      return "Postponed";
-    case "CANCELLED":
-      return "Cancelled";
-    case "SUSPENDED":
-      return "Suspended";
-    case "AWARDED":
-      return "Awarded";
-    default:
-      return match?.status || "—";
-  }
-}
-
-function getMatchList(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.matches)) return payload.matches;
-  if (Array.isArray(payload?.data?.matches)) return payload.data.matches;
-  return [];
-}
-
-function getCompetitionList(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.competitions)) return payload.competitions;
-  if (Array.isArray(payload?.data?.competitions)) return payload.data.competitions;
-  return [];
-}
-
-function getStandingsTable(payload) {
   if (Array.isArray(payload?.standings)) {
-    const total = payload.standings.find((item) => item.type === "TOTAL");
-    return total?.table || payload.standings[0]?.table || [];
+    return normalizeStandings(payload.standings);
   }
-  if (Array.isArray(payload?.table)) return payload.table;
-  if (Array.isArray(payload?.standings?.table)) return payload.standings.table;
+
+  if (Array.isArray(payload?.groups)) {
+    return normalizeStandings(payload.groups);
+  }
+
   return [];
-}
-
-async function apiRequest(path) {
-  const response = await fetch(`${API_BASE}${path}`);
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok || payload?.success === false) {
-    throw new Error(
-      payload?.message ||
-        payload?.error?.message ||
-        `Request failed (${response.status})`
-    );
-  }
-
-  return payload;
-}
-
-function Crest({ src, name, small = false }) {
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    setFailed(false);
-  }, [src]);
-
-  if (!src || failed) {
-    return (
-      <span className={`crest-fallback ${small ? "crest-small" : ""}`}>
-        ⚽
-      </span>
-    );
-  }
-
-  return (
-    <img
-      className={`team-crest ${small ? "crest-small" : ""}`}
-      src={src}
-      alt={`${name || "Team"} crest`}
-      loading="lazy"
-      onError={() => setFailed(true)}
-    />
-  );
-}
-
-function EmptyState({ children }) {
-  return <div className="empty-state">{children}</div>;
-}
-
-function LoadingState({ children }) {
-  return (
-    <div className="loading-state">
-      <span className="loading-spinner" />
-      <span>{children}</span>
-    </div>
-  );
-}
-
-function MatchCard({ match, onOpen, t, language }) {
-  const home = match?.homeTeam || {};
-  const away = match?.awayTeam || {};
-  const live = isLive(match);
-  const score = getScore(match);
-
-  return (
-    <button className="match-card" onClick={() => onOpen(match)} type="button">
-      <div className="match-card-top">
-        <span className="match-competition">
-          {match?.competition?.emblem && (
-            <Crest
-              src={match.competition.emblem}
-              name={match.competition.name}
-              small
-            />
-          )}
-          {match?.competition?.name || "Football"}
-        </span>
-        <span className={`match-status ${live ? "status-live" : ""}`}>
-          {live && <span className="live-dot" />}
-          {getMatchStatus(match, t)}
-        </span>
-      </div>
-
-      <div className="match-teams">
-        <div className="match-team">
-          <Crest src={home.crest} name={home.name} />
-          <span className="team-name">{home.name || "Home team"}</span>
-        </div>
-
-        <div className={`match-score ${live ? "score-live" : ""}`}>
-          {score}
-        </div>
-
-        <div className="match-team">
-          <Crest src={away.crest} name={away.name} />
-          <span className="team-name">{away.name || "Away team"}</span>
-        </div>
-      </div>
-
-      <div className="match-card-bottom">
-        <span>{match?.stage?.replaceAll("_", " ") || ""}</span>
-        <span>{formatKickoff(match?.utcDate, language)}</span>
-        <span className="match-open-arrow">›</span>
-      </div>
-    </button>
-  );
 }
 
 function App() {
-  const [language, setLanguage] = useState("en");
-  const [darkMode, setDarkMode] = useState(true);
   const [view, setView] = useState("home");
-  const [selectedDate, setSelectedDate] = useState(localDateKey());
+  const [date, setDate] = useState(todayString());
   const [matches, setMatches] = useState([]);
   const [liveMatches, setLiveMatches] = useState([]);
   const [leagues, setLeagues] = useState([]);
-  const [leagueMatches, setLeagueMatches] = useState([]);
-  const [leagueStandings, setLeagueStandings] = useState([]);
-  const [leagueTeams, setLeagueTeams] = useState([]);
-  const [leagueScorers, setLeagueScorers] = useState([]);
-  const [selectedLeague, setSelectedLeague] = useState(null);
+  const [news, setNews] = useState([]);
   const [selectedMatch, setSelectedMatch] = useState(null);
-  const [matchDetails, setMatchDetails] = useState(null);
-  const [detailsTab, setDetailsTab] = useState("overview");
+  const [detailTab, setDetailTab] = useState("overview");
+  const [detailData, setDetailData] = useState({});
+  const [selectedLeague, setSelectedLeague] = useState(null);
   const [leagueTab, setLeagueTab] = useState("matches");
-  const [searchText, setSearchText] = useState("");
-  const [loadingMatches, setLoadingMatches] = useState(false);
-  const [loadingLive, setLoadingLive] = useState(false);
-  const [loadingLeagues, setLoadingLeagues] = useState(false);
-  const [loadingLeagueDetails, setLoadingLeagueDetails] = useState(false);
-  const [loadingMatchDetails, setLoadingMatchDetails] = useState(false);
+  const [leagueData, setLeagueData] = useState([]);
+  const [leagueLoading, setLeagueLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [liveError, setLiveError] = useState("");
-  const [leaguesError, setLeaguesError] = useState("");
-  const [detailError, setDetailError] = useState("");
-
-  const t = TEXT[language];
-
-  const today = localDateKey();
-  const visibleDates = useMemo(
-    () => Array.from({ length: 18 }, (_, index) => addDays(today, index - 3)),
-    [today]
-  );
-
-  const sortedLeagues = useMemo(() => {
-    const rank = (code) => {
-      const index = LEAGUE_PRIORITY.indexOf(code);
-      return index === -1 ? 999 : index;
-    };
-
-    return [...leagues].sort((a, b) => {
-      const priorityDifference = rank(a.code) - rank(b.code);
-      if (priorityDifference !== 0) return priorityDifference;
-      return (a.name || "").localeCompare(b.name || "");
-    });
-  }, [leagues]);
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [adminKey, setAdminKey] = useState("");
+  const [newsForm, setNewsForm] = useState({
+    title: "",
+    summary: "",
+    image: "",
+    url: "",
+    category: "Football",
+  });
+  const [publishing, setPublishing] = useState(false);
+  const [newsMessage, setNewsMessage] = useState("");
 
   const loadMatches = useCallback(async () => {
-    setLoadingMatches(true);
+    setLoading(true);
     setError("");
 
     try {
-      const data = await apiRequest(
-        `/api/matches?date=${encodeURIComponent(selectedDate)}`
+      const result = await apiRequest(
+        `/api/matches?date=${encodeURIComponent(date)}`
       );
-      setMatches(getMatchList(data));
+      setMatches(result.matches || []);
     } catch (err) {
       setMatches([]);
-      setError(err.message || t.error);
+      setError(err.message);
     } finally {
-      setLoadingMatches(false);
+      setLoading(false);
     }
-  }, [selectedDate, t.error]);
+  }, [date]);
 
-  const loadLiveMatches = useCallback(async () => {
-    setLoadingLive(true);
-    setLiveError("");
-
+  const loadLive = useCallback(async () => {
     try {
-      const data = await apiRequest("/api/live");
-      setLiveMatches(getMatchList(data));
+      const result = await apiRequest("/api/live");
+      setLiveMatches(result.matches || []);
     } catch (err) {
       setLiveMatches([]);
-      setLiveError(err.message || t.error);
-    } finally {
-      setLoadingLive(false);
+      setError((old) => old || err.message);
     }
-  }, [t.error]);
+  }, []);
 
   const loadLeagues = useCallback(async () => {
-    setLoadingLeagues(true);
-    setLeaguesError("");
-
     try {
-      const data = await apiRequest("/api/leagues");
-      setLeagues(getCompetitionList(data));
+      const result = await apiRequest("/api/leagues");
+      setLeagues(result.leagues || []);
     } catch (err) {
       setLeagues([]);
-      setLeaguesError(err.message || t.error);
-    } finally {
-      setLoadingLeagues(false);
+      setError((old) => old || err.message);
     }
-  }, [t.error]);
+  }, []);
 
-  const loadLeagueDetails = useCallback(
-    async (league, initialTab = "matches") => {
-      if (!league?.code) return;
-
-      setSelectedLeague(league);
-      setLeagueTab(initialTab);
-      setView("league-detail");
-      setLoadingLeagueDetails(true);
-      setDetailError("");
-      setLeagueMatches([]);
-      setLeagueStandings([]);
-      setLeagueTeams([]);
-      setLeagueScorers([]);
-
-      const results = await Promise.allSettled([
-        apiRequest(`/api/leagues/${encodeURIComponent(league.code)}/matches`),
-        apiRequest(`/api/leagues/${encodeURIComponent(league.code)}/standings`),
-        apiRequest(`/api/leagues/${encodeURIComponent(league.code)}/teams`),
-        apiRequest(`/api/leagues/${encodeURIComponent(league.code)}/scorers`),
-      ]);
-
-      const [matchesResult, standingsResult, teamsResult, scorersResult] =
-        results;
-
-      if (matchesResult.status === "fulfilled") {
-        setLeagueMatches(getMatchList(matchesResult.value));
-      }
-
-      if (standingsResult.status === "fulfilled") {
-        setLeagueStandings(getStandingsTable(standingsResult.value));
-      }
-
-      if (teamsResult.status === "fulfilled") {
-        const payload = teamsResult.value;
-        setLeagueTeams(
-          Array.isArray(payload?.teams)
-            ? payload.teams
-            : Array.isArray(payload)
-              ? payload
-              : []
-        );
-      }
-
-      if (scorersResult.status === "fulfilled") {
-        const payload = scorersResult.value;
-        setLeagueScorers(
-          Array.isArray(payload?.scorers)
-            ? payload.scorers
-            : Array.isArray(payload)
-              ? payload
-              : []
-        );
-      }
-
-      const failures = results.filter((result) => result.status === "rejected");
-      if (failures.length === results.length) {
-        setDetailError(failures[0]?.reason?.message || t.error);
-      }
-
-      setLoadingLeagueDetails(false);
-    },
-    [t.error]
-  );
-
-  const openMatch = useCallback(
-    async (match) => {
-      if (!match?.id) return;
-
-      setSelectedMatch(match);
-      setMatchDetails(null);
-      setDetailsTab("overview");
-      setDetailError("");
-      setLoadingMatchDetails(true);
-      setView("match-detail");
-
-      try {
-        const payload = await apiRequest(`/api/matches/${match.id}`);
-        const detail =
-          payload?.match ||
-          payload?.data?.match ||
-          payload?.data ||
-          payload;
-
-        setMatchDetails(detail);
-      } catch (err) {
-        setMatchDetails(match);
-        setDetailError(err.message || t.error);
-      } finally {
-        setLoadingMatchDetails(false);
-      }
-    },
-    [t.error]
-  );
+  const loadNews = useCallback(async () => {
+    try {
+      const result = await apiRequest("/api/news");
+      setNews(result.news || []);
+    } catch (err) {
+      setNews([]);
+      setError((old) => old || err.message);
+    }
+  }, []);
 
   useEffect(() => {
     loadMatches();
   }, [loadMatches]);
 
   useEffect(() => {
-    loadLiveMatches();
+    loadLive();
+    loadLeagues();
+    loadNews();
+  }, [loadLive, loadLeagues, loadNews]);
 
-    const timer = window.setInterval(loadLiveMatches, 30000);
-    return () => window.clearInterval(timer);
-  }, [loadLiveMatches]);
+  const groupedMatches = useMemo(() => {
+    const groups = new Map();
+
+    for (const match of matches) {
+      const name = match?.league?.name || match?.competition?.name || "Other matches";
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(match);
+    }
+
+    return [...groups.entries()];
+  }, [matches]);
+
+  async function openMatch(match) {
+    setSelectedMatch(match);
+    setDetailTab("overview");
+    setDetailData({});
+    setView("match");
+    setError("");
+
+    try {
+      const result = await apiRequest(`/api/matches/${match.id}`);
+      setSelectedMatch(result.match || match);
+    } catch {
+      // Keep the match card's existing details if the provider has no full record.
+    }
+  }
 
   useEffect(() => {
-    loadLeagues();
-  }, [loadLeagues]);
+    if (!selectedMatch || view !== "match" || detailTab === "overview") return;
 
-  const allVisibleMatches = useMemo(() => {
-    if (view === "live") return liveMatches;
-    if (view === "league-detail") return leagueMatches;
-    return matches;
-  }, [view, liveMatches, leagueMatches, matches]);
+    let cancelled = false;
 
-  const filteredMatches = useMemo(() => {
-    const query = searchText.trim().toLowerCase();
+    async function loadDetail() {
+      setLoading(true);
+      setError("");
 
-    return [...allVisibleMatches]
-      .filter((match) => {
-        if (!query) return true;
-
-        const values = [
-          match?.homeTeam?.name,
-          match?.awayTeam?.name,
-          match?.competition?.name,
-          match?.competition?.code,
-        ];
-
-        return values.some((value) =>
-          String(value || "").toLowerCase().includes(query)
+      try {
+        const result = await apiRequest(
+          `/api/matches/${selectedMatch.id}/${detailTab}`
         );
-      })
-      .sort((a, b) => {
-        const aLive = isLive(a) ? 0 : 1;
-        const bLive = isLive(b) ? 0 : 1;
-        if (aLive !== bLive) return aLive - bLive;
 
-        const rank = (match) => {
-          const index = LEAGUE_PRIORITY.indexOf(match?.competition?.code);
-          return index === -1 ? 999 : index;
-        };
+        if (!cancelled) setDetailData((old) => ({ ...old, [detailTab]: result }));
+      } catch (err) {
+        if (!cancelled) {
+          setDetailData((old) => ({ ...old, [detailTab]: null }));
+          setError(err.message);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
 
-        if (rank(a) !== rank(b)) return rank(a) - rank(b);
-        return new Date(a?.utcDate || 0) - new Date(b?.utcDate || 0);
+    loadDetail();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedMatch, view, detailTab]);
+
+  async function openLeague(league) {
+    setSelectedLeague(league);
+    setLeagueTab("matches");
+    setLeagueData([]);
+    setView("league");
+    setError("");
+
+    if (!league.currentSeasonAvailable || league.currentSeason == null) {
+      setError(
+        `No current season is listed for ${league.name}. Old seasons will not be shown as current.`
+      );
+      return;
+    }
+
+    await loadLeagueSection(league, "matches");
+  }
+
+  async function loadLeagueSection(league, tab) {
+    if (!league?.id) return;
+
+    if (!league.currentSeasonAvailable || league.currentSeason == null) {
+      setLeagueData([]);
+      setError(`Current season data is unavailable for ${league.name}.`);
+      return;
+    }
+
+    setLeagueLoading(true);
+    setError("");
+
+    try {
+      const result = await apiRequest(
+        `/api/leagues/${league.id}/${tab}?season=${league.currentSeason}`
+      );
+
+      if (tab === "standings") {
+        setLeagueData(normalizeStandings(result.standings));
+      } else {
+        setLeagueData(
+          result.matches || result.teams || result.scorers || []
+        );
+      }
+    } catch (err) {
+      setLeagueData([]);
+      setError(err.message);
+    } finally {
+      setLeagueLoading(false);
+    }
+  }
+
+  async function chooseLeagueTab(tab) {
+    setLeagueTab(tab);
+    if (selectedLeague) await loadLeagueSection(selectedLeague, tab);
+  }
+
+  async function publishNews(event) {
+    event.preventDefault();
+    setPublishing(true);
+    setNewsMessage("");
+
+    try {
+      const result = await apiRequest("/api/news", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-key": adminKey,
+        },
+        body: JSON.stringify({
+          ...newsForm,
+          description: newsForm.summary,
+          source: "AG SOCCER",
+          publishedAt: new Date().toISOString(),
+        }),
       });
-  }, [allVisibleMatches, searchText]);
 
-  const filteredLeagues = useMemo(() => {
-    const query = searchText.trim().toLowerCase();
-    if (!query) return sortedLeagues;
+      if (result.article) {
+        setNews((old) => [result.article, ...old]);
+      } else {
+        await loadNews();
+      }
 
-    return sortedLeagues.filter((league) =>
-      [
-        league.name,
-        league.code,
-        league.area?.name,
-        league.type,
-      ].some((value) => String(value || "").toLowerCase().includes(query))
-    );
-  }, [sortedLeagues, searchText]);
-
-  function goTo(nextView) {
-    setSearchText("");
-    setView(nextView);
-
-    if (nextView === "live") loadLiveMatches();
-    if (nextView === "leagues") loadLeagues();
-    if (nextView === "matches" || nextView === "home") loadMatches();
+      setNewsForm({
+        title: "",
+        summary: "",
+        image: "",
+        url: "",
+        category: "Football",
+      });
+      setNewsMessage("Article published successfully.");
+    } catch (err) {
+      setNewsMessage(err.message);
+    } finally {
+      setPublishing(false);
+    }
   }
 
-  function renderDateNavigation() {
+  function goBack() {
+    if (view === "match") {
+      setView("home");
+    } else if (view === "league") {
+      setView("leagues");
+    } else {
+      setView("home");
+    }
+    setError("");
+  }
+
+  function renderMatchCard(match) {
+    const live = isLiveMatch(match);
+    const home = match.homeTeam || {};
+    const away = match.awayTeam || {};
+    const leagueName = match.league?.name || match.competition?.name;
+
     return (
-      <div className="date-navigation">
-        <div className="date-strip" aria-label="Select match date">
-          {visibleDates.map((dateKey) => {
-            const offset = Math.round(
-              (new Date(`${dateKey}T12:00:00`) -
-                new Date(`${today}T12:00:00`)) /
-                86400000
-            );
-
-            let label = formatDate(dateKey, language);
-            if (offset === -1) label = t.yesterday;
-            if (offset === 0) label = t.today;
-            if (offset === 1) label = t.tomorrow;
-
-            return (
-              <button
-                type="button"
-                key={dateKey}
-                className={`date-chip ${
-                  selectedDate === dateKey ? "date-chip-active" : ""
-                }`}
-                onClick={() => {
-                  setSelectedDate(dateKey);
-                  setView("matches");
-                }}
-              >
-                <span>{label}</span>
-                <small>{dateKey.split("-")[2]}</small>
-              </button>
-            );
-          })}
-          <label className="calendar-chip" title={t.chooseDate}>
-            <span>▦</span>
-            <small>{t.chooseDate}</small>
-            <input
-              aria-label={t.chooseDate}
-              type="date"
-              value={selectedDate}
-              onChange={(event) => {
-                if (event.target.value) {
-                  setSelectedDate(event.target.value);
-                  setView("matches");
-                }
-              }}
-            />
-          </label>
+      <button
+        type="button"
+        className="match-card"
+        key={match.id}
+        onClick={() => openMatch(match)}
+      >
+        <div className="match-card-top">
+          <span>{formatDate(match.date, { hour: "2-digit", minute: "2-digit" })}</span>
+          <span className={live ? "status live-status" : "status"}>
+            {getStatus(match)}
+          </span>
         </div>
-      </div>
-    );
-  }
 
-  function renderMatchList(items, isLoading, errorMessage) {
-    if (isLoading) return <LoadingState>{t.loading}</LoadingState>;
+        <div className="match-teams">
+          <div className="team-side">
+            <img src={home.logo || "/club-placeholder.svg"} alt="" />
+            <span>{home.name || "Home team"}</span>
+          </div>
 
-    if (errorMessage) {
-      return (
-        <EmptyState>
-          <p>{errorMessage}</p>
-          <button className="primary-button" onClick={loadMatches}>
-            {t.retry}
-          </button>
-        </EmptyState>
-      );
-    }
+          <strong className="match-score">{matchScore(match)}</strong>
 
-    if (!items.length) {
-      return <EmptyState>{t.noMatches}</EmptyState>;
-    }
-
-    return (
-      <div className="match-list">
-        {items.map((match) => (
-          <MatchCard
-            key={match.id}
-            match={match}
-            onOpen={openMatch}
-            t={t}
-            language={language}
-          />
-        ))}
-      </div>
-    );
-  }
-
-  function renderLeagues() {
-    if (loadingLeagues) return <LoadingState>{t.loading}</LoadingState>;
-
-    if (leaguesError) {
-      return (
-        <EmptyState>
-          <p>{leaguesError}</p>
-          <button className="primary-button" onClick={loadLeagues}>
-            {t.retry}
-          </button>
-        </EmptyState>
-      );
-    }
-
-    if (!filteredLeagues.length) {
-      return <EmptyState>{t.noLeagues}</EmptyState>;
-    }
-
-    return (
-      <div className="league-grid">
-        {filteredLeagues.map((league) => (
-          <button
-            className="league-card"
-            key={league.id || league.code}
-            type="button"
-            onClick={() => loadLeagueDetails(league)}
-          >
-            <div className="league-emblem">
-              <Crest
-                src={league.emblem}
-                name={league.name}
-              />
-            </div>
-            <div className="league-card-text">
-              <strong>{league.name}</strong>
-              <span>{league.area?.name || league.code}</span>
-              <small>{league.currentSeason?.currentMatchday
-                ? `${t.matchday} ${league.currentSeason.currentMatchday}`
-                : league.type || "Competition"}</small>
-            </div>
-            <span className="league-arrow">›</span>
-          </button>
-        ))}
-      </div>
-    );
-  }
-
-  function renderStandings(table) {
-    if (!table?.length) {
-      return <EmptyState>{t.noStandings}</EmptyState>;
-    }
-
-    return (
-      <div className="table-scroll">
-        <table className="standings-table">
-          <thead>
-            <tr>
-              <th>{t.position}</th>
-              <th className="team-column">Team</th>
-              <th>P</th>
-              <th>W</th>
-              <th>D</th>
-              <th>L</th>
-              <th>{t.goalDifference}</th>
-              <th>{t.points}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {table.map((row) => (
-              <tr key={row.team?.id || row.position}>
-                <td>{row.position}</td>
-                <td className="team-column">
-                  <span className="table-team">
-                    <Crest
-                      src={row.team?.crest}
-                      name={row.team?.name}
-                      small
-                    />
-                    {row.team?.shortName || row.team?.name || "—"}
-                  </span>
-                </td>
-                <td>{row.playedGames ?? "—"}</td>
-                <td>{row.won ?? "—"}</td>
-                <td>{row.draw ?? "—"}</td>
-                <td>{row.lost ?? "—"}</td>
-                <td>{row.goalDifference ?? "—"}</td>
-                <td className="points-cell">{row.points ?? "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
-
-  function renderLeagueDetail() {
-    if (!selectedLeague) return <EmptyState>{t.selectLeague}</EmptyState>;
-
-    const tabs = [
-      ["matches", t.matches],
-      ["standings", t.standings],
-      ["teams", t.teams],
-      ["scorers", t.scorers],
-    ];
-
-    return (
-      <section className="page-section">
-        <button className="back-button" onClick={() => goTo("leagues")}>
-          ← {t.back}
-        </button>
-
-        <div className="detail-heading">
-          <Crest
-            src={selectedLeague.emblem}
-            name={selectedLeague.name}
-          />
-          <div>
-            <h2>{selectedLeague.name}</h2>
-            <p>
-              {selectedLeague.area?.name || selectedLeague.code}
-              {selectedLeague.currentSeason?.startDate
-                ? ` · ${selectedLeague.currentSeason.startDate.slice(0, 4)}–${selectedLeague.currentSeason.endDate?.slice(0, 4) || ""}`
-                : ""}
-            </p>
+          <div className="team-side away-side">
+            <img src={away.logo || "/club-placeholder.svg"} alt="" />
+            <span>{away.name || "Away team"}</span>
           </div>
         </div>
 
-        <div className="tab-strip">
-          {tabs.map(([id, label]) => (
-            <button
-              key={id}
-              className={leagueTab === id ? "tab-active" : ""}
-              onClick={() => setLeagueTab(id)}
-              type="button"
-            >
-              {label}
-            </button>
-          ))}
+        <div className="match-card-bottom">
+          <span>{leagueName || "Football"}</span>
+          <span>Details ↗</span>
         </div>
-
-        {loadingLeagueDetails ? (
-          <LoadingState>{t.loading}</LoadingState>
-        ) : (
-          <>
-            {detailError && <p className="inline-error">{detailError}</p>}
-
-            {leagueTab === "matches" &&
-              renderMatchList(leagueMatches, false, "")}
-
-            {leagueTab === "standings" &&
-              renderStandings(leagueStandings)}
-
-            {leagueTab === "teams" &&
-              (leagueTeams.length ? (
-                <div className="league-grid">
-                  {leagueTeams.map((team) => (
-                    <div className="league-card team-card" key={team.id}>
-                      <Crest src={team.crest} name={team.name} />
-                      <div className="league-card-text">
-                        <strong>{team.name}</strong>
-                        <span>{team.shortName || team.tla || ""}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <EmptyState>{t.noData}</EmptyState>
-              ))}
-
-            {leagueTab === "scorers" &&
-              (leagueScorers.length ? (
-                <div className="scorer-list">
-                  {leagueScorers.map((item, index) => (
-                    <div className="scorer-row" key={item.player?.id || index}>
-                      <span className="scorer-rank">{index + 1}</span>
-                      <div className="scorer-info">
-                        <strong>{item.player?.name || "Unknown player"}</strong>
-                        <span>
-                          {item.team?.name || ""}
-                          {item.penalties ? ` · ${item.penalties} penalties` : ""}
-                        </span>
-                      </div>
-                      <strong className="scorer-goals">{item.goals ?? 0}</strong>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <EmptyState>{t.noData}</EmptyState>
-              ))}
-          </>
-        )}
-      </section>
+      </button>
     );
   }
 
-  function renderEvents() {
-    const goals = matchDetails?.goals || [];
-    const bookings = matchDetails?.bookings || [];
-    const substitutions = matchDetails?.substitutions || [];
-
-    const events = [
-      ...goals.map((event) => ({ ...event, eventType: "goal" })),
-      ...bookings.map((event) => ({ ...event, eventType: "card" })),
-      ...substitutions.map((event) => ({
-        ...event,
-        eventType: "substitution",
-      })),
-    ].sort((a, b) => {
-      const minuteA = Number.parseInt(a.minute || a.time?.minute || 0, 10);
-      const minuteB = Number.parseInt(b.minute || b.time?.minute || 0, 10);
-      return minuteA - minuteB;
-    });
-
-    if (!events.length) return <EmptyState>{t.noData}</EmptyState>;
-
-    return (
-      <div className="events-list">
-        {events.map((event, index) => {
-          const teamId = event.team?.id;
-          const homeId = matchDetails?.homeTeam?.id;
-          const isHome = teamId === homeId;
-          const minute = event.minute ?? event.time?.minute;
-          let description = "";
-
-          if (event.eventType === "goal") {
-            description = `⚽ ${event.scorer?.name || event.player?.name || "Goal"}`;
-            if (event.assist?.name) description += ` · Assist: ${event.assist.name}`;
-          } else if (event.eventType === "card") {
-            description = `${event.card === "YELLOW_CARD" ? "🟨" : "🟥"} ${event.player?.name || "Card"}`;
-          } else {
-            description = `🔄 ${event.playerOut?.name || "Player out"} → ${event.playerIn?.name || "Player in"}`;
-          }
-
-          return (
-            <div
-              className={`event-row ${isHome ? "event-home" : "event-away"}`}
-              key={`${event.eventType}-${index}`}
-            >
-              <span className="event-minute">
-                {minute != null ? `${minute}'` : "—"}
-              </span>
-              <span className="event-description">{description}</span>
-              <span className="event-team">
-                {event.team?.shortName || event.team?.name || ""}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
-
-  function renderMatchDetail() {
-    if (!selectedMatch) return null;
-
-    const match = matchDetails || selectedMatch;
-    const home = match.homeTeam || selectedMatch.homeTeam || {};
-    const away = match.awayTeam || selectedMatch.awayTeam || {};
-    const score = getScore(match);
-
-    const tabs = [
-      ["overview", t.overview],
-      ["events", t.events],
-      ["lineups", t.lineups],
-      ["statistics", t.statistics],
-      ["standings", t.standings],
-    ];
-
-    return (
-      <section className="page-section">
-        <button className="back-button" onClick={() => goTo("matches")}>
-          ← {t.back}
-        </button>
-
-        <div className="match-detail-competition">
-          {match.competition?.name || selectedMatch.competition?.name || "Football"}
-        </div>
-
-        <div className="match-detail-scoreboard">
-          <div className="scoreboard-team">
-            <Crest src={home.crest} name={home.name} />
-            <strong>{home.name || "Home"}</strong>
-                  <small>{home.shortName || ""}</small>
-          </div>
-
-          <div className="scoreboard-score">
-            <div className={isLive(match) ? "score-live" : ""}>{score}</div>
-            <span className={`match-status ${isLive(match) ? "status-live" : ""}`}>
-              {getMatchStatus(match, t)}
-            </span>
-          </div>
-
-          <div className="scoreboard-team">
-            <Crest src={away.crest} name={away.name} />
-            <strong>{away.name || "Away"}</strong>
-            <small>{away.shortName || ""}</small>
-          </div>
-        </div>
-
-        <p className="match-detail-date">
-          {formatFullDate(match.utcDate || selectedMatch.utcDate, language)}
-        </p>
-
-        {loadingMatchDetails && <LoadingState>{t.loading}</LoadingState>}
-        {detailError && <p className="inline-error">{detailError}</p>}
-
-        <div className="tab-strip">
-          {tabs.map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              className={detailsTab === id ? "tab-active" : ""}
-              onClick={() => setDetailsTab(id)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {!loadingMatchDetails && (
-          <div className="match-detail-panel">
-            {detailsTab === "overview" && (
-              <div className="overview-grid">
-                <div className="info-card">
-                  <span>{t.competition}</span>
-                  <strong>{match.competition?.name || "—"}</strong>
-                </div>
-                <div className="info-card">
-                  <span>{t.matchday}</span>
-                  <strong>{match.matchday ?? "—"}</strong>
-                </div>
-                <div className="info-card">
-                  <span>{t.venue}</span>
-                  <strong>{match.venue || "—"}</strong>
-                </div>
-                <div className="info-card">
-                  <span>{t.kickOff}</span>
-                  <strong>{formatFullDate(match.utcDate, language)}</strong>
-                </div>
-                <div className="info-card">
-                  <span>{t.goals}</span>
-                  <strong>
-                    {(match.goals || []).length
-                      ? (match.goals || [])
-                          .map((goal) => goal.scorer?.name || goal.player?.name)
-                          .filter(Boolean)
-                          .join(", ")
-                      : t.noData}
-                  </strong>
-                </div>
-              </div>
-            )}
-
-            {detailsTab === "events" && renderEvents()}
-
-            {detailsTab === "lineups" && (
-              <div className="lineups-grid">
-                {[home, away].map((team, index) => {
-                  const lineup = index === 0
-                    ? match.homeTeam?.lineup || match.lineups?.home || []
-                    : match.awayTeam?.lineup || match.lineups?.away || [];
-
-                  return (
-                    <div className="lineup-card" key={team.id || index}>
-                      <h3>{team.name || (index === 0 ? "Home" : "Away")}</h3>
-                      {Array.isArray(lineup) && lineup.length ? (
-                        lineup.map((player) => (
-                          <div className="lineup-player" key={player.id || player.name}>
-                            <span>{player.shirtNumber ?? "—"}</span>
-                            {player.name}
-                          </div>
-                        ))
-                      ) : (
-                        <p className="muted-text">{t.noLineups}</p>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {detailsTab === "statistics" && (
-              <EmptyState>{t.noStatistics}</EmptyState>
-            )}
-
-            {detailsTab === "standings" && (
-              <div>
-                {match.competition?.code ? (
-                  <button
-                    className="primary-button standings-link"
-                    onClick={() =>
-                      loadLeagueDetails(
-                        leagues.find((item) => item.code === match.competition.code) ||
-                          match.competition,
-                        "standings"
-                      )
-                    }
-                  >
-                    {t.standings} · {match.competition.name}
-                  </button>
-                ) : (
-                  <EmptyState>{t.noStandings}</EmptyState>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-      </section>
-    );
-  }
-
-  function renderMainContent() {
-    if (view === "match-detail") return renderMatchDetail();
-    if (view === "league-detail") return renderLeagueDetail();
-
-    if (view === "leagues") {
-      return (
-        <section className="page-section">
-          <div className="section-heading">
-            <div>
-              <h2>{t.leagues}</h2>
-              <p>{filteredLeagues.length} competitions</p>
-            </div>
-            <button className="icon-button" onClick={loadLeagues} title={t.refresh}>
-              ↻
-            </button>
-          </div>
-          {renderLeagues()}
-        </section>
-      );
-    }
-
-    if (view === "search") {
-      return (
-        <section className="page-section">
-          <div className="section-heading">
-            <div>
-              <h2>{t.search}</h2>
-              <p>{t.searchPlaceholder}</p>
-            </div>
-          </div>
-
-          <input
-            className="search-input"
-            value={searchText}
-            onChange={(event) => setSearchText(event.target.value)}
-            placeholder={t.searchPlaceholder}
-            autoFocus
-          />
-
-          <h3 className="subheading">{t.leagues}</h3>
-          {renderLeagues()}
-
-          <h3 className="subheading">{t.matches}</h3>
-          {renderMatchList(filteredMatches, loadingMatches, error)}
-        </section>
-      );
-    }
-
-    if (view === "live") {
-      return (
-        <section className="page-section">
-          <div className="section-heading">
-            <div>
-              <h2><span className="live-dot" /> {t.live}</h2>
-              <p>{liveMatches.length} live matches</p>
-            </div>
-            <button className="icon-button" onClick={loadLiveMatches} title={t.refresh}>
-              ↻
-            </button>
-          </div>
-          {renderMatchList(liveMatches, loadingLive, liveError)}
-        </section>
-      );
-    }
-
+  function renderHome() {
     return (
       <>
-        {renderDateNavigation()}
-        <section className="page-section">
-          <div className="section-heading">
-            <div>
-              <h2>{view === "home" ? t.home : t.matches}</h2>
-              <p>{formatDate(selectedDate, language)} · {selectedDate}</p>
-            </div>
-            <button className="icon-button" onClick={loadMatches} title={t.refresh}>
-              ↻
-            </button>
+        <section className="hero">
+          <div>
+            <p className="eyebrow">YOUR FOOTBALL HUB</p>
+            <h1>Every match.<br /><span>Every moment.</span></h1>
+            <p className="hero-copy">
+              Fixtures, scores, standings, and football news in one place.
+            </p>
           </div>
-
-          {renderMatchList(filteredMatches, loadingMatches, error)}
+          <div className="hero-ball" aria-hidden="true">⚽</div>
         </section>
 
-        <section className="page-section featured-leagues">
+        <section className="section-block">
           <div className="section-heading">
             <div>
-              <h2>{t.leagues}</h2>
-              <p>Browse available competitions</p>
+              <p className="eyebrow">FIXTURES</p>
+              <h2>Match schedule</h2>
             </div>
-            <button className="text-button" onClick={() => goTo("leagues")}>
-              View all →
+            <button className="text-button" onClick={() => setView("live")}>
+              Live matches →
             </button>
           </div>
-          {loadingLeagues ? (
-            <LoadingState>{t.loading}</LoadingState>
-          ) : (
-            <div className="featured-league-strip">
-              {sortedLeagues.slice(0, 8).map((league) => (
-                <button
-                  className="featured-league"
-                  key={league.id || league.code}
-                  onClick={() => loadLeagueDetails(league)}
-                >
-                  <Crest src={league.emblem} name={league.name} />
-                  <span>{league.name}</span>
-                </button>
-              ))}
+
+          <div className="date-navigation">
+            <button aria-label="Previous day" onClick={() => setDate(shiftDate(date, -1))}>
+              ‹
+            </button>
+            <div>
+              <strong>
+                {date === todayString()
+                  ? "Today"
+                  : formatDate(`${date}T12:00:00`, {
+                      weekday: "short",
+                      day: "numeric",
+                      month: "short",
+                    })}
+              </strong>
+              <span>{date}</span>
+            </div>
+            <button aria-label="Next day" onClick={() => setDate(shiftDate(date, 1))}>
+              ›
+            </button>
+            <button className="today-button" onClick={() => setDate(todayString())}>
+              Today
+            </button>
+          </div>
+
+          {loading && <p className="info-message">Loading matches…</p>}
+
+          {!loading && matches.length === 0 && (
+            <div className="empty-state">
+              <span>⚽</span>
+              <h3>No matches found</h3>
+              <p>There may be no scheduled matches on this date, or the provider may not include them in your plan.</p>
             </div>
           )}
+
+          <div className="match-groups">
+            {groupedMatches.map(([leagueName, leagueMatches]) => (
+              <section className="match-group" key={leagueName}>
+                <h3>{leagueName}</h3>
+                {leagueMatches.map(renderMatchCard)}
+              </section>
+            ))}
+          </div>
         </section>
       </>
     );
   }
 
-  return (
-    <div className={`app-shell ${darkMode ? "theme-dark" : "theme-light"}`}>
-      <header className="app-header">
-        <button className="brand" onClick={() => goTo("home")} type="button">
-          <span className="brand-icon">⚽</span>
-          <span>
-            <strong>AG Football</strong>
-            <small>Scores. Matches. More.</small>
-          </span>
-        </button>
-
-        <div className="header-actions">
-          <button
-            className="header-button"
-            onClick={() => setLanguage(language === "en" ? "am" : "en")}
-            title="Change language"
-          >
-            {t.language}
-          </button>
-          <button
-            className="header-button"
-            onClick={() => setDarkMode((value) => !value)}
-            title="Toggle theme"
-          >
-            {darkMode ? "☀" : "☾"}
-          </button>
+  function renderLive() {
+    return (
+      <section className="section-block">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">LIVE CENTER</p>
+            <h2><span className="live-dot" /> Live matches</h2>
+          </div>
+          <button className="text-button" onClick={loadLive}>Refresh ↻</button>
         </div>
-      </header>
 
-      <main className="app-main">
-        <aside className="desktop-sidebar">
-          <p className="sidebar-label">MENU</p>
-          {[
-            ["home", "⌂", t.home],
-            ["live", "◉", t.live],
-            ["matches", "▤", t.matches],
-            ["leagues", "🏆", t.leagues],
-            ["search", "⌕", t.search],
-          ].map(([id, icon, label]) => (
+        {liveMatches.length === 0 ? (
+          <div className="empty-state">
+            <span>🔴</span>
+            <h3>No live matches right now</h3>
+            <p>Live matches appear here when the provider reports an in-progress status.</p>
+          </div>
+        ) : (
+          <div className="match-groups">
+            {liveMatches.map(renderMatchCard)}
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  function renderLeagues() {
+    return (
+      <section className="section-block">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">COMPETITIONS</p>
+            <h2>Explore leagues</h2>
+          </div>
+          <button className="text-button" onClick={loadLeagues}>Refresh ↻</button>
+        </div>
+
+        <div className="league-grid">
+          {leagues.map((league) => (
             <button
-              key={id}
-              className={`sidebar-link ${view === id ? "nav-active" : ""}`}
-              onClick={() => goTo(id)}
+              type="button"
+              className="league-card"
+              key={league.id}
+              onClick={() => openLeague(league)}
             >
-              <span>{icon}</span>{label}
+              <img src={league.logo || "/club-placeholder.svg"} alt="" />
+              <span className="league-card-name">{league.name}</span>
+              <span className="league-country">{league.country?.name || "International"}</span>
+              <span className="season-chip">
+                {league.currentSeasonAvailable
+                  ? `Season ${league.currentSeason}`
+                  : "Current season unavailable"}
+              </span>
             </button>
           ))}
-          <div className="sidebar-note">
-            <strong>AG Football</strong>
-            <p>Follow the matches that matter to you.</p>
-          </div>
-        </aside>
-
-        <div className="content-column">
-          {renderMainContent()}
         </div>
 
-        <aside className="right-sidebar">
-          <div className="side-panel">
-            <h3>{t.live}</h3>
-            {loadingLive ? (
-              <LoadingState>{t.loading}</LoadingState>
-            ) : liveMatches.length ? (
-              liveMatches.slice(0, 5).map((match) => (
-                <button
-                  className="mini-live-match"
-                  key={match.id}
-                  onClick={() => openMatch(match)}
-                >
-                  <span>{match.homeTeam?.shortName || match.homeTeam?.name}</span>
-                  <strong>{getScore(match)}</strong>
-                  <span>{match.awayTeam?.shortName || match.awayTeam?.name}</span>
-                  <small>{getLiveLabel(match, t)}</small>
-                </button>
-              ))
-            ) : (
-              <p className="muted-text">No live matches right now.</p>
-            )}
-            <button className="text-button" onClick={() => goTo("live")}>
-              {t.live} →
-            </button>
+        {leagues.length === 0 && (
+          <div className="empty-state">
+            <h3>No competitions loaded</h3>
+            <p>Check the backend and Highlightly API configuration.</p>
           </div>
+        )}
+      </section>
+    );
+  }
 
-          <div className="side-panel">
-            <h3>{t.leagues}</h3>
-            {sortedLeagues.slice(0, 6).map((league) => (
-              <button
-                className="mini-league"
-                key={league.id || league.code}
-                onClick={() => loadLeagueDetails(league)}
-              >
-                <Crest src={league.emblem} name={league.name} small />
-                <span>{league.name}</span>
-              </button>
-            ))}
-            <button className="text-button" onClick={() => goTo("leagues")}>
-              View all →
-            </button>
+  function renderNews() {
+    return (
+      <section className="section-block">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">LATEST UPDATES</p>
+            <h2>Football news</h2>
           </div>
-        </aside>
+          <button
+            className="admin-toggle"
+            onClick={() => {
+              setAdminOpen((old) => !old);
+              setNewsMessage("");
+            }}
+          >
+            {adminOpen ? "Close admin" : "＋ Admin News"}
+          </button>
+        </div>
+
+        {adminOpen && (
+          <form className="admin-form" onSubmit={publishNews}>
+            <div>
+              <p className="eyebrow">ADMIN AREA</p>
+              <h3>Publish an article</h3>
+              <p className="muted">
+                Only users with your server's ADMIN_KEY can publish news.
+              </p>
+            </div>
+
+            <label>
+              Admin secret
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={adminKey}
+                onChange={(e) => setAdminKey(e.target.value)}
+                required
+                placeholder="Enter your private admin key"
+              />
+            </label>
+
+            <label>
+              Headline
+              <input
+                value={newsForm.title}
+                onChange={(e) => setNewsForm({ ...newsForm, title: e.target.value })}
+                required
+                maxLength={180}
+                placeholder="Enter a news headline"
+              />
+            </label>
+
+            <label>
+              Summary
+              <textarea
+                value={newsForm.summary}
+                onChange={(e) => setNewsForm({ ...newsForm, summary: e.target.value })}
+                required
+                maxLength={3000}
+                placeholder="Write your article summary"
+              />
+            </label>
+
+            <label>
+              Image URL (optional)
+              <input
+                type="url"
+                value={newsForm.image}
+                onChange={(e) => setNewsForm({ ...newsForm, image: e.target.value })}
+                placeholder="https://example.com/image.jpg"
+              />
+            </label>
+
+            <label>
+              Article URL (optional)
+              <input
+                type="url"
+                value={newsForm.url}
+                onChange={(e) => setNewsForm({ ...newsForm, url: e.target.value })}
+                placeholder="https://example.com/article"
+              />
+            </label>
+
+            <label>
+              Category
+              <select
+                value={newsForm.category}
+                onChange={(e) => setNewsForm({ ...newsForm, category: e.target.value })}
+              >
+                <option>Football</option>
+                <option>Premier League</option>
+                <option>Champions League</option>
+                <option>La Liga</option>
+                <option>Transfers</option>
+                <option>International</option>
+              </select>
+            </label>
+
+            <button className="primary-button" type="submit" disabled={publishing}>
+              {publishing ? "Publishing…" : "Publish News"}
+            </button>
+            {newsMessage && <p className="form-message" role="status">{newsMessage}</p>}
+          </form>
+        )}
+
+        <div className="news-grid">
+          {news.map((article) => (
+            <article className="news-card" key={article.id}>
+              {article.image && (
+                <img className="news-image" src={article.image} alt="" />
+              )}
+              <div className="news-content">
+                <span className="news-category">{article.category || "Football"}</span>
+                <h3>{article.title}</h3>
+                <p>{article.summary || article.description}</p>
+                <div className="news-footer">
+                  <span>{article.source || "AG SOCCER"}</span>
+                  <span>{formatDate(article.publishedAt, {
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                  })}</span>
+                </div>
+                {article.url && (
+                  <a href={article.url} target="_blank" rel="noreferrer">
+                    Read article ↗
+                  </a>
+                )}
+                {adminOpen && (
+                  <button
+                    type="button"
+                    className="delete-news"
+                    onClick={async () => {
+                      if (!window.confirm("Delete this article?")) return;
+                      try {
+                        await apiRequest(`/api/news/${article.id}`, {
+                          method: "DELETE",
+                          headers: { "x-admin-key": adminKey },
+                        });
+                        setNews((old) => old.filter((item) => item.id !== article.id));
+                        setNewsMessage("Article deleted.");
+                      } catch (err) {
+                        setNewsMessage(err.message);
+                      }
+                    }}
+                  >
+                    Delete article
+                  </button>
+                )}
+              </div>
+            </article>
+          ))}
+        </div>
+
+        {news.length === 0 && (
+          <div className="empty-state">
+            <span>📰</span>
+            <h3>No articles published yet</h3>
+            <p>Use Admin News to add your first article.</p>
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  function renderMatchDetails() {
+    const match = selectedMatch;
+    if (!match) return null;
+
+    const home = match.homeTeam || {};
+    const away = match.awayTeam || {};
+    const data = detailData[detailTab];
+
+    return (
+      <section className="section-block">
+        <button className="back-button" onClick={goBack}>← Back</button>
+
+        <div className="match-hero">
+          <p className="eyebrow">{match.league?.name || match.competition?.name}</p>
+          <p className="muted">{formatDate(match.date, {
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}</p>
+
+          <div className="match-hero-teams">
+            <div>
+              <img src={home.logo || "/club-placeholder.svg"} alt="" />
+              <h3>{home.name}</h3>
+            </div>
+            <strong>{matchScore(match)}</strong>
+            <div>
+              <img src={away.logo || "/club-placeholder.svg"} alt="" />
+              <h3>{away.name}</h3>
+            </div>
+          </div>
+          <span className={isLiveMatch(match) ? "status live-status" : "status"}>
+            {getStatus(match)}
+          </span>
+        </div>
+
+        <div className="detail-tabs">
+          {["overview", "events", "lineups", "statistics"].map((tab) => (
+            <button
+              key={tab}
+              className={detailTab === tab ? "active" : ""}
+              onClick={() => setDetailTab(tab)}
+            >
+              {tab[0].toUpperCase() + tab.slice(1)}
+            </button>
+          ))}
+        </div>
+
+        {detailTab === "overview" ? (
+          <div className="detail-panel">
+            <h3>Match information</h3>
+            <p><strong>Competition:</strong> {match.league?.name || match.competition?.name || "Unknown"}</p>
+            <p><strong>Kickoff:</strong> {formatDate(match.date, {
+              hour: "2-digit",
+              minute: "2-digit",
+              timeZoneName: "short",
+            })}</p>
+            <p><strong>Status:</strong> {getStatus(match)}</p>
+            <p><strong>Score:</strong> {matchScore(match)}</p>
+          </div>
+        ) : loading ? (
+          <p className="info-message">Loading {detailTab}…</p>
+        ) : data == null ? (
+          <div className="empty-state">
+            <h3>{detailTab[0].toUpperCase() + detailTab.slice(1)} unavailable</h3>
+            <p>The provider may not supply this information for this match or your plan.</p>
+          </div>
+        ) : (
+          <pre className="data-panel">{JSON.stringify(
+            data[detailTab] ?? data.events ?? data.lineups ?? data.statistics ?? data,
+            null,
+            2
+          )}</pre>
+        )}
+      </section>
+    );
+  }
+
+  function renderLeagueDetails() {
+    if (!selectedLeague) return null;
+
+    return (
+      <section className="section-block">
+        <button className="back-button" onClick={goBack}>← All leagues</button>
+
+        <div className="league-detail-heading">
+          <img src={selectedLeague.logo || "/club-placeholder.svg"} alt="" />
+          <div>
+            <p className="eyebrow">{selectedLeague.country?.name || "Competition"}</p>
+            <h2>{selectedLeague.name}</h2>
+            <p className="muted">
+              {selectedLeague.currentSeasonAvailable
+                ? `Season ${selectedLeague.currentSeason}`
+                : "Current season unavailable"}
+            </p>
+          </div>
+        </div>
+
+        <div className="detail-tabs">
+          {["matches", "standings", "teams", "scorers"].map((tab) => (
+            <button
+              key={tab}
+              className={leagueTab === tab ? "active" : ""}
+              onClick={() => chooseLeagueTab(tab)}
+            >
+              {tab[0].toUpperCase() + tab.slice(1)}
+            </button>
+          ))}
+        </div>
+
+        {leagueLoading && <p className="info-message">Loading {leagueTab}…</p>}
+
+        {!leagueLoading && leagueTab === "matches" && (
+          leagueData.length
+            ? leagueData.map(renderMatchCard)
+            : <p className="empty-inline">No fixtures available for this season.</p>
+        )}
+
+        {!leagueLoading && leagueTab === "standings" && (
+          leagueData.length ? (
+            <div className="table-scroll">
+              <table className="standings-table">
+                <thead>
+                  <tr>
+                    <th>#</th><th>Team</th><th>MP</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>Pts</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leagueData.map((row, index) => {
+                    const stats = row.total || row;
+                    return (
+                      <tr key={row.team?.id || index}>
+                        <td>{row.position || index + 1}</td>
+                        <td className="standing-team">
+                          {row.team?.logo && <img src={row.team.logo} alt="" />}
+                          {row.team?.name || row.name || "Team"}
+                        </td>
+                        <td>{stats.games ?? stats.played ?? 0}</td>
+                        <td>{stats.wins ?? 0}</td>
+                        <td>{stats.draws ?? 0}</td>
+                        <td>{stats.loses ?? stats.losses ?? 0}</td>
+                        <td>{stats.scoredGoals ?? stats.goalsFor ?? 0}</td>
+                        <td>{stats.receivedGoals ?? stats.goalsAgainst ?? 0}</td>
+                        <td><strong>{row.points ?? stats.points ?? 0}</strong></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : <p className="empty-inline">No standings available for this season.</p>
+        )}
+
+        {!leagueLoading && leagueTab === "teams" && (
+          <div className="team-grid">
+            {leagueData.map((team) => {
+              const item = team.team || team;
+              return (
+                <div className="team-card" key={item.id || item.name}>
+                  <img src={item.logo || "/club-placeholder.svg"} alt="" />
+                  <span>{item.name}</span>
+                </div>
+              );
+            })}
+            {!leagueData.length && <p className="empty-inline">No teams available.</p>}
+          </div>
+        )}
+
+        {!leagueLoading && leagueTab === "scorers" && (
+          leagueData.length ? (
+            <div className="scorer-list">
+              {leagueData.map((player, index) => (
+                <div className="scorer-row" key={player.id || index}>
+                  <strong>{index + 1}</strong>
+                  <span>{player.name || player.player?.name || "Player"}</span>
+                  <strong>{player.goals ?? player.statistics?.goals ?? "—"}</strong>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="empty-inline">
+              Top scorers are not connected yet for this API integration.
+            </p>
+          )
+        )}
+      </section>
+    );
+  }
+
+  return (
+    <div className="app-shell">
+      <header className="app-header">
+        <button className="brand" onClick={() => setView("home")} aria-label="AG SOCCER home">
+          <span className="brand-icon">AG</span>
+          <span>AG <strong>SOCCER</strong></span>
+        </button>
+        <span className="header-tag">FOOTBALL CENTRAL</span>
+      </header>
+
+      <main className="main-content">
+        {error && (
+          <div className="error-banner">
+            <span>{error}</span>
+            <button onClick={() => setError("")} aria-label="Dismiss error">×</button>
+          </div>
+        )}
+
+        {view === "home" && renderHome()}
+        {view === "live" && renderLive()}
+        {view === "leagues" && renderLeagues()}
+        {view === "news" && renderNews()}
+        {view === "match" && renderMatchDetails()}
+        {view === "league" && renderLeagueDetails()}
       </main>
 
-      <nav className="bottom-navigation">
-        {[
-          ["home", "⌂", t.home],
-          ["live", "◉", t.live],
-          ["matches", "▤", t.matches],
-          ["leagues", "🏆", t.leagues],
-          ["search", "⌕", t.search],
-        ].map(([id, icon, label]) => (
+      <nav className="bottom-nav" aria-label="Main navigation">
+        {NAV_ITEMS.map((item) => (
           <button
-            key={id}
-            className={view === id ? "bottom-nav-active" : ""}
-            onClick={() => goTo(id)}
+            key={item.id}
+            className={view === item.id ? "active" : ""}
+            onClick={() => {
+              setView(item.id);
+              setError("");
+              if (item.id === "news") loadNews();
+              if (item.id === "leagues") loadLeagues();
+              if (item.id === "live") loadLive();
+            }}
           >
-            <span>{icon}</span>
-            <small>{label}</small>
+            <span>{item.icon}</span>
+            <small>{item.label}</small>
           </button>
         ))}
       </nav>
     </div>
   );
 }
-function getMatchMinute(match) {
-  const status = match.status;
-  const minute = match.minute;
-  const addedTime = match.injuryTime;
 
-  if (status === "PAUSED") return "HT";
-  if (status === "EXTRA_TIME") {
-    return minute != null ? `${minute}′ ET` : "ET";
-  }
-  if (status === "PENALTY_SHOOTOUT") return "PEN";
-  if (status === "IN_PLAY") {
-    if (minute == null) return "LIVE";
-
-    return addedTime != null && addedTime > 0
-      ? `${minute}+${addedTime}′`
-      : `${minute}′`;
-  }
-
-  return status || "";
-}
-
-function getGoalMinute(goal) {
-  if (goal.minute == null) return "";
-
-  const addedTime =
-    goal.injuryTime != null && goal.injuryTime > 0
-      ? `+${goal.injuryTime}`
-      : "";
-
-  return `${goal.minute}${addedTime}′`;
-}
-
-function getGoalTypeLabel(type) {
-  if (type === "PENALTY") return " (P)";
-  if (type === "OWN") return " (OG)";
-  return "";
-}
 export default App;
