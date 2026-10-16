@@ -1,8 +1,8 @@
 
 import express from "express";
-import axios from "axios";
 import cors from "cors";
 import dotenv from "dotenv";
+import axios from "axios";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,784 +11,639 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const API_BASE =
+  process.env.HIGHLIGHTLY_BASE_URL || "https://soccer.highlightly.net";
+const API_KEY =
+  process.env.HIGHLIGHTLY_API_KEY ||
+  process.env.RAPIDAPI_KEY ||
+  process.env.API_KEY;
 
-const API_BASE = "https://v3.football.api-sports.io";
-const API_KEY = process.env.API_FOOTBALL_KEY;
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "data");
 const NEWS_FILE = path.join(DATA_DIR, "news.json");
+const CURRENT_YEAR = new Date().getFullYear();
 
-app.use(cors());
+app.use(cors({
+  origin: process.env.CLIENT_ORIGIN
+    ? process.env.CLIENT_ORIGIN.split(",").map((s) => s.trim())
+    : true,
+}));
 app.use(express.json({ limit: "1mb" }));
 
-// --------------------------------------------------
-// API-FOOTBALL CLIENT
-// --------------------------------------------------
-
-const footballAPI = axios.create({
+const api = axios.create({
   baseURL: API_BASE,
   timeout: 20000,
   headers: {
-    "x-apisports-key": API_KEY || "",
+    "x-rapidapi-key": API_KEY || "",
+    Accept: "application/json",
   },
 });
 
-async function apiGet(endpoint, params = {}) {
-  if (!API_KEY) {
-    const error = new Error(
-      "API_FOOTBALL_KEY is missing from server/.env"
-    );
-    error.status = 500;
-    throw error;
-  }
+const PRIORITY = [
+  "premier league",
+  "uefa champions league",
+  "la liga",
+  "serie a",
+  "bundesliga",
+  "ligue 1",
+  "europa league",
+  "conference league",
+  "world cup",
+  "major league soccer",
+];
 
-  const response = await footballAPI.get(endpoint, { params });
-  const data = response.data;
-
-  if (data.errors && Object.keys(data.errors).length > 0) {
-    const error = new Error(
-      JSON.stringify(data.errors)
-    );
-    error.status = 502;
-    error.providerErrors = data.errors;
-    throw error;
-  }
-
-  return data;
+function unwrap(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (payload?.data && typeof payload.data === "object") return payload.data;
+  return payload;
 }
 
-function sendError(res, error) {
-  console.error("AG SOCCER API error:", error.message);
+function getArray(payload, ...keys) {
+  const value = unwrap(payload);
+  if (Array.isArray(value)) return value;
 
-  res.status(error.status || error.response?.status || 500).json({
-    success: false,
-    message: error.message || "Request failed",
-    ...(error.providerErrors && {
-      providerErrors: error.providerErrors,
-    }),
-    ...(error.response?.data?.errors && {
-      providerErrors: error.response.data.errors,
-    }),
+  for (const key of keys) {
+    if (Array.isArray(value?.[key])) return value[key];
+    if (Array.isArray(payload?.[key])) return payload[key];
+    if (Array.isArray(payload?.data?.[key])) return payload.data[key];
+  }
+  return [];
+}
+
+function sortLeagues(leagues) {
+  return [...leagues].sort((a, b) => {
+    const nameA = String(a.name || "").toLowerCase();
+    const nameB = String(b.name || "").toLowerCase();
+
+    const indexA = PRIORITY.findIndex((name) => nameA.includes(name));
+    const indexB = PRIORITY.findIndex((name) => nameB.includes(name));
+
+    const rankA = indexA === -1 ? 999 : indexA;
+    const rankB = indexB === -1 ? 999 : indexB;
+
+    return rankA - rankB || nameA.localeCompare(nameB);
   });
 }
 
-// --------------------------------------------------
-// NORMALIZE FIXTURES FOR THE REACT FRONTEND
-// --------------------------------------------------
+function normalizeLeague(league) {
+  const seasons = (league?.seasons || [])
+    .map((item) => Number(item?.season ?? item))
+    .filter((year) => Number.isInteger(year))
+    .sort((a, b) => b - a);
 
-function normalizeMatch(item) {
-  const fixture = item.fixture || {};
-  const league = item.league || {};
-  const teams = item.teams || {};
-  const goals = item.goals || {};
-  const score = item.score || {};
+  // Never label an old season as current.
+  const currentSeason =
+    seasons.find((year) =>
+      year >= CURRENT_YEAR - 1 && year <= CURRENT_YEAR
+    ) ?? null;
 
   return {
-    id: fixture.id,
-    utcDate: fixture.date,
-    date: fixture.date,
-    timestamp: fixture.timestamp,
-
-    status: fixture.status?.short || "NS",
-    statusText: fixture.status?.long || "Not Started",
-    elapsed: fixture.status?.elapsed ?? null,
-
-    area: {
-      name: league.country || "",
-      flag: league.flag || null,
-    },
-
-    competition: {
-      id: league.id,
-      name: league.name,
-      code: league.name,
-      emblem: league.logo,
-      type: league.type || "LEAGUE",
-    },
-
-    league,
-
-    homeTeam: {
-      id: teams.home?.id,
-      name: teams.home?.name,
-      shortName: teams.home?.name,
-      crest: teams.home?.logo,
-      logo: teams.home?.logo,
-      winner: teams.home?.winner ?? null,
-    },
-
-    awayTeam: {
-      id: teams.away?.id,
-      name: teams.away?.name,
-      shortName: teams.away?.name,
-      crest: teams.away?.logo,
-      logo: teams.away?.logo,
-      winner: teams.away?.winner ?? null,
-    },
-
-    goals: {
-      home: goals.home,
-      away: goals.away,
-    },
-
-    score: {
-      home: goals.home,
-      away: goals.away,
-      halftime: score.halftime || {
-        home: null,
-        away: null,
-      },
-      fulltime: score.fulltime || {
-        home: goals.home,
-        away: goals.away,
-      },
-      extratime: score.extratime || {
-        home: null,
-        away: null,
-      },
-      penalties: score.penalty || {
-        home: null,
-        away: null,
-      },
-    },
-
-    venue: fixture.venue || null,
-    referee: fixture.referee || null,
-    round: league.round || null,
-    season: league.season || null,
+    ...league,
+    id: league?.id,
+    name: league?.name || "Unknown competition",
+    logo: league?.logo || "",
+    country: league?.country || null,
+    seasons: [...new Set(seasons)].map((season) => ({ season })),
+    currentSeason,
+    currentSeasonAvailable: currentSeason !== null,
   };
 }
 
-function currentSeason() {
-  return Number(process.env.FOOTBALL_SEASON || 2024);
+function normalizeMatch(match) {
+  const home = match?.homeTeam || match?.home || {};
+  const away = match?.awayTeam || match?.away || {};
+  const league = match?.league || match?.competition || {};
+  const state = match?.state || {};
+  const score = state?.score?.current || match?.score || {};
+
+  return {
+    ...match,
+    id: match?.id,
+    date: match?.date || match?.utcDate || null,
+    utcDate: match?.date || match?.utcDate || null,
+    league: {
+      id: league?.id ?? match?.leagueId,
+      name: league?.name || "Unknown competition",
+      logo: league?.logo || league?.emblem || "",
+      season: league?.season ?? null,
+      country: league?.country || match?.country || null,
+    },
+    competition: {
+      id: league?.id ?? match?.leagueId,
+      name: league?.name || "Unknown competition",
+      emblem: league?.logo || league?.emblem || "",
+    },
+    homeTeam: {
+      ...home,
+      id: home?.id,
+      name: home?.name || "Home team",
+      logo: home?.logo || home?.crest || "",
+    },
+    awayTeam: {
+      ...away,
+      id: away?.id,
+      name: away?.name || "Away team",
+      logo: away?.logo || away?.crest || "",
+    },
+    state: {
+      ...state,
+      description: state?.description || state?.status || "Scheduled",
+      clock: state?.clock || null,
+      score: state?.score || { current: score },
+    },
+    status: state?.description || state?.status || match?.status || "SCHEDULED",
+    score: match?.score || {
+      fullTime: {
+        home: score?.home ?? null,
+        away: score?.away ?? null,
+      },
+    },
+  };
 }
 
-function normalizeList(items = []) {
-  return items.map(normalizeMatch);
-}
-
-// --------------------------------------------------
-// BASIC ROUTES
-// --------------------------------------------------
-
-app.get("/", (req, res) => {
-  res.json({
-    success: true,
-    message: "Welcome to AG SOCCER API ⚽",
-    provider: "API-Football",
-  });
-});
-
-app.get("/api/health", (req, res) => {
-  res.json({
-    success: true,
-    status: "running",
-    provider: "API-Football",
-    apiKeyConfigured: Boolean(API_KEY),
-  });
-});
-
-app.get("/api/test", async (req, res) => {
-  try {
-    const data = await apiGet("/status");
-
-    res.json({
-      success: true,
-      message: "API-Football connection successful",
-      account: data.response?.[0] || data.response || null,
-      requests: data,
-    });
-  } catch (error) {
-    sendError(res, error);
-  }
-});
-
-// --------------------------------------------------
-// LEAGUES AND COMPETITIONS
-// GET /api/leagues?season=2026
-// GET /api/leagues?country=England&season=2026
-// --------------------------------------------------
-
-app.get(
-  ["/api/leagues", "/api/competitions"],
-  async (req, res) => {
-    try {
-      const params = {
-        season: Number(req.query.season) || currentSeason(),
-      };
-
-      if (req.query.country) {
-        params.country = req.query.country;
-      }
-
-      if (req.query.id) {
-        params.id = Number(req.query.id);
-      }
-
-      if (req.query.search) {
-        params.search = req.query.search;
-      }
-
-      const data = await apiGet("/leagues", params);
-
-      res.json({
-        success: true,
-        count: data.response.length,
-        leagues: data.response,
-        competitions: data.response,
-      });
-    } catch (error) {
-      sendError(res, error);
-    }
-  }
-);
-
-// --------------------------------------------------
-// ALL MATCHES
-//
-// GET /api/matches?date=2026-10-14
-// GET /api/matches?league=39&season=2026
-// GET /api/matches?from=2026-10-01&to=2026-10-14
-// GET /api/matches?status=FT
-// --------------------------------------------------
-
-app.get("/api/matches", async (req, res) => {
-  try {
-    const params = {};
-
-    if (req.query.date) {
-      params.date = req.query.date;
-    }
-
-    if (req.query.from) {
-      params.from = req.query.from;
-    }
-
-    if (req.query.to) {
-      params.to = req.query.to;
-    }
-
-    if (req.query.league) {
-      params.league = Number(req.query.league);
-      params.season =
-        Number(req.query.season) || currentSeason();
-    }
-
-    if (req.query.team) {
-      params.team = Number(req.query.team);
-      params.season =
-        Number(req.query.season) || currentSeason();
-    }
-
-    if (req.query.season && !params.season) {
-      params.season = Number(req.query.season);
-    }
-
-    if (req.query.status) {
-      params.status = req.query.status;
-    }
-
-    if (req.query.country) {
-      params.country = req.query.country;
-    }
-
-    const data = await apiGet("/fixtures", params);
-    const matches = normalizeList(data.response);
-
-    res.json({
-      success: true,
-      count: matches.length,
-      matches,
-    });
-  } catch (error) {
-    sendError(res, error);
-  }
-});
-
-// --------------------------------------------------
-// LIVE MATCHES
-// Keep this route before /api/matches/:id.
-//
-// GET /api/live
-// GET /api/matches/live
-// --------------------------------------------------
-
-app.get(
-  ["/api/live", "/api/matches/live"],
-  async (req, res) => {
-    try {
-      const params = {};
-
-      if (req.query.league) {
-        params.league = Number(req.query.league);
-        params.season =
-          Number(req.query.season) || currentSeason();
-      } else {
-        params.live = "all";
-      }
-
-      const data = await apiGet("/fixtures", params);
-      const matches = normalizeList(data.response);
-
-      res.json({
-        success: true,
-        count: matches.length,
-        matches,
-      });
-    } catch (error) {
-      sendError(res, error);
-    }
-  }
-);
-
-// --------------------------------------------------
-// MATCH DETAILS, EVENTS AND LINEUPS
-//
-// GET /api/matches/123456
-// GET /api/matches/123456/details
-//
-// Events and lineups are requested separately.
-// Availability depends on the match and subscription.
-// --------------------------------------------------
-
-app.get(
-  ["/api/matches/:id", "/api/matches/:id/details"],
-  async (req, res) => {
-    try {
-      const id = Number(req.params.id);
-
-      if (!Number.isInteger(id) || id <= 0) {
-        return res.status(400).json({
-          success: false,
-          message: "A valid numeric fixture ID is required",
-        });
-      }
-
-      const [fixtureData, eventsResult, lineupsResult] =
-        await Promise.allSettled([
-          apiGet("/fixtures", { id }),
-          apiGet("/fixtures/events", { fixture: id }),
-          apiGet("/fixtures/lineups", { fixture: id }),
-        ]);
-
-      if (fixtureData.status === "rejected") {
-        throw fixtureData.reason;
-      }
-
-      const fixture = fixtureData.value.response?.[0];
-
-      if (!fixture) {
-        return res.status(404).json({
-          success: false,
-          message: "Match not found",
-        });
-      }
-
-      const events =
-        eventsResult.status === "fulfilled"
-          ? eventsResult.value.response
-          : [];
-
-      const lineups =
-        lineupsResult.status === "fulfilled"
-          ? lineupsResult.value.response
-          : [];
-
-      const match = normalizeMatch(fixture);
-
-      res.json({
-        success: true,
-        match,
-        events,
-        lineups,
-        availableData: {
-          events: eventsResult.status === "fulfilled",
-          lineups: lineupsResult.status === "fulfilled",
-        },
-        detailsErrors: {
-          events:
-            eventsResult.status === "rejected"
-              ? eventsResult.reason.message
-              : null,
-          lineups:
-            lineupsResult.status === "rejected"
-              ? lineupsResult.reason.message
-              : null,
-        },
-      });
-    } catch (error) {
-      sendError(res, error);
-    }
-  }
-);
-
-// --------------------------------------------------
-// LEAGUE MATCHES
-// GET /api/leagues/39/matches?season=2026
-// --------------------------------------------------
-
-app.get("/api/leagues/:id/matches", async (req, res) => {
-  try {
-    const league = Number(req.params.id);
-    const season =
-      Number(req.query.season) || currentSeason();
-
-    const params = { league, season };
-
-    if (req.query.date) {
-      params.date = req.query.date;
-    }
-
-    if (req.query.status) {
-      params.status = req.query.status;
-    }
-
-    const data = await apiGet("/fixtures", params);
-    const matches = normalizeList(data.response);
-
-    res.json({
-      success: true,
-      count: matches.length,
-      matches,
-    });
-  } catch (error) {
-    sendError(res, error);
-  }
-});
-
-// --------------------------------------------------
-// LEAGUE STANDINGS
-// GET /api/leagues/39/standings?season=2026
-// --------------------------------------------------
-
-app.get("/api/leagues/:id/standings", async (req, res) => {
-  try {
-    const league = Number(req.params.id);
-    const season =
-      Number(req.query.season) || currentSeason();
-
-    const data = await apiGet("/standings", {
-      league,
-      season,
-    });
-
-    res.json({
-      success: true,
-      standings: data.response,
-    });
-  } catch (error) {
-    sendError(res, error);
-  }
-});
-
-// --------------------------------------------------
-// LEAGUE TEAMS
-// GET /api/leagues/39/teams?season=2026
-// --------------------------------------------------
-
-app.get("/api/leagues/:id/teams", async (req, res) => {
-  try {
-    const league = Number(req.params.id);
-    const season =
-      Number(req.query.season) || currentSeason();
-
-    const data = await apiGet("/teams", {
-      league,
-      season,
-    });
-
-    res.json({
-      success: true,
-      count: data.response.length,
-      teams: data.response,
-    });
-  } catch (error) {
-    sendError(res, error);
-  }
-});
-
-// --------------------------------------------------
-// TOP SCORERS
-// GET /api/leagues/39/scorers?season=2026
-// --------------------------------------------------
-
-app.get("/api/leagues/:id/scorers", async (req, res) => {
-  try {
-    const league = Number(req.params.id);
-    const season =
-      Number(req.query.season) || currentSeason();
-
-    const data = await apiGet("/players/topscorers", {
-      league,
-      season,
-    });
-
-    res.json({
-      success: true,
-      count: data.response.length,
-      scorers: data.response,
-    });
-  } catch (error) {
-    sendError(res, error);
-  }
-});
-
-// --------------------------------------------------
-// TEAM DETAILS
-// GET /api/teams/33
-// --------------------------------------------------
-
-app.get("/api/teams/:id", async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-
-    const data = await apiGet("/teams", { id });
-
-    res.json({
-      success: true,
-      team: data.response[0] || null,
-    });
-  } catch (error) {
-    sendError(res, error);
-  }
-});
-
-// --------------------------------------------------
-// TEAM MATCHES
-// GET /api/teams/33/matches?season=2026
-// --------------------------------------------------
-
-app.get("/api/teams/:id/matches", async (req, res) => {
-  try {
-    const team = Number(req.params.id);
-    const params = {
-      team,
-      season: Number(req.query.season) || currentSeason(),
-    };
-
-    if (req.query.date) {
-      params.date = req.query.date;
-    }
-
-    if (req.query.last) {
-      params.last = Number(req.query.last);
-    }
-
-    if (req.query.next) {
-      params.next = Number(req.query.next);
-    }
-
-    const data = await apiGet("/fixtures", params);
-    const matches = normalizeList(data.response);
-
-    res.json({
-      success: true,
-      count: matches.length,
-      matches,
-    });
-  } catch (error) {
-    sendError(res, error);
-  }
-});
-
-// --------------------------------------------------
-// NEWS FILE HELPERS
-// News are stored in server/data/news.json
-// --------------------------------------------------
-
-async function ensureNewsFile() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-
-  try {
-    await fs.access(NEWS_FILE);
-  } catch {
-    await fs.writeFile(NEWS_FILE, "[]", "utf8");
-  }
-}
-
-async function readNews() {
-  await ensureNewsFile();
-
-  const content = await fs.readFile(NEWS_FILE, "utf8");
-  const news = JSON.parse(content);
-
-  return Array.isArray(news) ? news : [];
-}
-
-async function writeNews(news) {
-  await ensureNewsFile();
-
-  await fs.writeFile(
-    NEWS_FILE,
-    JSON.stringify(news, null, 2),
-    "utf8"
+function isLive(match) {
+  const text = [
+    match?.state?.description,
+    match?.state?.status,
+    match?.status,
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  return (
+    text.includes("live") ||
+    text.includes("in play") ||
+    text.includes("in progress") ||
+    text.includes("1st half") ||
+    text.includes("2nd half") ||
+    text.includes("half time") ||
+    text.includes("halftime") ||
+    text.includes("extra time") ||
+    text.includes("penalties")
   );
 }
 
-function requireAdmin(req, res, next) {
-  const adminKey =
-    req.get("x-admin-key") || req.body?.adminKey;
+function requireApiKey(_req, res, next) {
+  if (!API_KEY) {
+    return res.status(500).json({
+      success: false,
+      message: "Highlightly API key is missing. Configure HIGHLIGHTLY_API_KEY in server/.env.",
+    });
+  }
+  next();
+}
 
-  if (!process.env.ADMIN_KEY) {
+async function providerGet(endpoint, params = {}) {
+  const response = await api.get(endpoint, { params });
+  return response.data;
+}
+
+async function getLeague(leagueId) {
+  const payload = await providerGet(`/leagues/${encodeURIComponent(leagueId)}`);
+  const league = Array.isArray(payload)
+    ? payload[0]
+    : payload?.data?.[0] || payload?.data || payload;
+
+  if (!league?.id) {
+    throw new Error(`Competition ${leagueId} was not found.`);
+  }
+
+  return normalizeLeague(league);
+}
+
+async function resolveSeason(leagueId, requestedSeason) {
+  const league = await getLeague(leagueId);
+  const available = league.seasons.map((item) => item.season);
+
+  if (requestedSeason !== undefined && requestedSeason !== "") {
+    const year = Number(requestedSeason);
+
+    if (!Number.isInteger(year) || !available.includes(year)) {
+      const error = new Error(
+        `Season ${requestedSeason} is not available for ${league.name}. Available seasons: ${available.join(", ") || "none"}.`
+      );
+      error.status = 400;
+      throw error;
+    }
+
+    if (year < CURRENT_YEAR - 1) {
+      const error = new Error(
+        `Season ${year} is historical. Select the current available season instead.`
+      );
+      error.status = 400;
+      throw error;
+    }
+
+    return { league, season: year };
+  }
+
+  if (league.currentSeason === null) {
+    const error = new Error(
+      `No current season is listed for ${league.name}. Available seasons: ${available.join(", ") || "none"}. This endpoint will not silently use an old season.`
+    );
+    error.status = 409;
+    throw error;
+  }
+
+  return { league, season: league.currentSeason };
+}
+
+async function readNews() {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+
+  try {
+    const content = await fs.readFile(NEWS_FILE, "utf8");
+    const news = JSON.parse(content);
+    return Array.isArray(news) ? news : [];
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    await fs.writeFile(NEWS_FILE, "[]", "utf8");
+    return [];
+  }
+}
+
+async function writeNews(news) {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  await fs.writeFile(NEWS_FILE, JSON.stringify(news, null, 2), "utf8");
+}
+
+function requireAdmin(req, res, next) {
+  const configuredKey = process.env.ADMIN_KEY;
+  const suppliedKey = req.get("x-admin-key");
+
+  if (!configuredKey) {
     return res.status(503).json({
       success: false,
-      message: "ADMIN_KEY is not configured on the server",
+      message: "Admin publishing is disabled. Set ADMIN_KEY in server/.env.",
     });
   }
 
-  if (adminKey !== process.env.ADMIN_KEY) {
+  if (!suppliedKey || suppliedKey !== configuredKey) {
     return res.status(401).json({
       success: false,
-      message: "Invalid admin key",
+      message: "Invalid admin key.",
     });
   }
 
   next();
 }
 
-// --------------------------------------------------
-// NEWS ROUTES
-// GET    /api/news
-// POST   /api/news
-// PUT    /api/news/:id
-// DELETE /api/news/:id
-// --------------------------------------------------
+function handleError(res, error) {
+  const status = error.status || error.response?.status || 500;
+  const providerMessage =
+    error.response?.data?.message ||
+    error.response?.data?.error ||
+    error.message ||
+    "Unknown error";
 
-app.get("/api/news", async (req, res) => {
+  console.error("AG SOCCER API error:", {
+    endpoint: error.config?.url,
+    status,
+    message: providerMessage,
+  });
+
+  res.status(status >= 400 && status < 500 ? status : 502).json({
+    success: false,
+    message: providerMessage,
+  });
+}
+
+// Health check
+app.get("/", (_req, res) => {
+  res.json({ success: true, message: "Welcome to AG SOCCER API ⚽" });
+});
+
+app.get("/api/health", (_req, res) => {
+  res.json({
+    success: true,
+    apiKeyConfigured: Boolean(API_KEY),
+    adminConfigured: Boolean(process.env.ADMIN_KEY),
+    currentYear: CURRENT_YEAR,
+  });
+});
+
+// Competitions, with famous leagues first and their available seasons.
+app.get("/api/leagues", requireApiKey, async (_req, res) => {
   try {
-    const news = await readNews();
+    const payload = await providerGet("/leagues", {
+      limit: 100,
+      offset: 0,
+    });
+
+    const leagues = sortLeagues(
+      getArray(payload, "leagues").map(normalizeLeague)
+    );
 
     res.json({
       success: true,
-      count: news.length,
-      news,
+      count: leagues.length,
+      leagues,
+      pagination: payload?.pagination || null,
     });
   } catch (error) {
-    sendError(res, error);
+    handleError(res, error);
+  }
+});
+
+app.get("/api/competitions", requireApiKey, async (_req, res) => {
+  try {
+    const payload = await providerGet("/leagues", {
+      limit: 100,
+      offset: 0,
+    });
+    const leagues = sortLeagues(
+      getArray(payload, "leagues").map(normalizeLeague)
+    );
+
+    res.json({ success: true, count: leagues.length, competitions: leagues });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/leagues/:id", requireApiKey, async (req, res) => {
+  try {
+    const league = await getLeague(req.params.id);
+    res.json({ success: true, league });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+// Matches for a selected date. Highlightly requires a primary filter.
+app.get("/api/matches", requireApiKey, async (req, res) => {
+  try {
+    const date = req.query.date || new Date().toISOString().slice(0, 10);
+    const params = { date, limit: 100, offset: 0 };
+
+    if (req.query.leagueId) {
+      params.leagueId = Number(req.query.leagueId);
+    }
+
+    const payload = await providerGet("/matches", params);
+    const matches = getArray(payload, "matches").map(normalizeMatch);
+
+    res.json({ success: true, date, count: matches.length, matches });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/live", requireApiKey, async (req, res) => {
+  try {
+    const date = req.query.date || new Date().toISOString().slice(0, 10);
+    const payload = await providerGet("/matches", {
+      date,
+      limit: 100,
+      offset: 0,
+    });
+
+    const matches = getArray(payload, "matches")
+      .map(normalizeMatch)
+      .filter(isLive);
+
+    res.json({ success: true, date, count: matches.length, matches });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/matches/live", requireApiKey, async (req, res) => {
+  req.url = `/api/live${req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""}`;
+  app.handle(req, res);
+});
+
+app.get("/api/matches/:id/events", requireApiKey, async (req, res) => {
+  try {
+    const data = await providerGet(`/events/${encodeURIComponent(req.params.id)}`);
+    res.json({ success: true, events: getArray(data, "events") });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/matches/:id/lineups", requireApiKey, async (req, res) => {
+  try {
+    const data = await providerGet(`/lineups/${encodeURIComponent(req.params.id)}`);
+    res.json({ success: true, lineups: unwrap(data) });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/matches/:id/statistics", requireApiKey, async (req, res) => {
+  try {
+    const data = await providerGet(`/statistics/${encodeURIComponent(req.params.id)}`);
+    res.json({ success: true, statistics: unwrap(data) });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/matches/:id", requireApiKey, async (req, res) => {
+  try {
+    const payload = await providerGet(
+      `/matches/${encodeURIComponent(req.params.id)}`
+    );
+    const match = unwrap(payload);
+    res.json({
+      success: true,
+      match: normalizeMatch(Array.isArray(match) ? match[0] : match),
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+// Standings, fixtures and teams use the season returned for that league.
+app.get("/api/leagues/:id/standings", requireApiKey, async (req, res) => {
+  try {
+    const { league, season } = await resolveSeason(
+      req.params.id,
+      req.query.season
+    );
+
+    const payload = await providerGet("/standings", {
+      leagueId: Number(req.params.id),
+      season,
+    });
+
+    const standings = payload?.standings || payload?.groups || payload?.data?.standings || payload?.data?.groups || [];
+
+    res.json({ success: true, league, season, standings });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/standings/:id", requireApiKey, async (req, res) => {
+  req.url = `/api/leagues/${encodeURIComponent(req.params.id)}/standings${req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""}`;
+  app.handle(req, res);
+});
+
+app.get("/api/leagues/:id/matches", requireApiKey, async (req, res) => {
+  try {
+    const { league, season } = await resolveSeason(
+      req.params.id,
+      req.query.season
+    );
+
+    const payload = await providerGet("/matches", {
+      leagueId: Number(req.params.id),
+      season,
+      limit: 100,
+      offset: 0,
+    });
+
+    const matches = getArray(payload, "matches").map(normalizeMatch);
+    res.json({ success: true, league, season, count: matches.length, matches });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/teams", requireApiKey, async (req, res) => {
+  try {
+    const params = { limit: Number(req.query.limit) || 100, offset: 0 };
+    if (req.query.leagueId) params.leagueId = Number(req.query.leagueId);
+    if (req.query.season) params.season = Number(req.query.season);
+    if (req.query.search) params.name = req.query.search;
+
+    const payload = await providerGet("/teams", params);
+    const teams = getArray(payload, "teams");
+
+    res.json({ success: true, count: teams.length, teams });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/teams/:id", requireApiKey, async (req, res) => {
+  try {
+    const payload = await providerGet(
+      `/teams/${encodeURIComponent(req.params.id)}`
+    );
+    res.json({ success: true, team: unwrap(payload) });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/leagues/:id/teams", requireApiKey, async (req, res) => {
+  try {
+    const { league, season } = await resolveSeason(
+      req.params.id,
+      req.query.season
+    );
+
+    const payload = await providerGet("/teams", {
+      leagueId: Number(req.params.id),
+      season,
+      limit: 100,
+      offset: 0,
+    });
+
+    const teams = getArray(payload, "teams");
+    res.json({ success: true, league, season, count: teams.length, teams });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+// Scorers are not fabricated if the provider does not supply them.
+app.get("/api/leagues/:id/scorers", requireApiKey, async (req, res) => {
+  try {
+    const { league, season } = await resolveSeason(
+      req.params.id,
+      req.query.season
+    );
+
+    res.json({
+      success: true,
+      league,
+      season,
+      count: 0,
+      scorers: [],
+      message: "Top scorers are not yet connected to this Highlightly integration.",
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+// News: public read, admin-only create and delete.
+app.get("/api/news", async (_req, res) => {
+  try {
+    const news = (await readNews()).sort(
+      (a, b) =>
+        new Date(b.publishedAt || b.createdAt || 0) -
+        new Date(a.publishedAt || a.createdAt || 0)
+    );
+    res.json({ success: true, count: news.length, news });
+  } catch (error) {
+    handleError(res, error);
   }
 });
 
 app.post("/api/news", requireAdmin, async (req, res) => {
   try {
-    const { title, content, image, category, author } = req.body;
+    const { title, summary, description, image, url, category, source } =
+      req.body || {};
 
-    if (!title || !content) {
+    if (!String(title || "").trim() || !String(summary || description || "").trim()) {
       return res.status(400).json({
         success: false,
-        message: "Title and content are required",
+        message: "A title and summary are required.",
       });
     }
 
     const news = await readNews();
-
     const article = {
       id: `${Date.now()}`,
-      title,
-      content,
-      image: image || "",
-      category: category || "Football",
-      author: author || "AG SOCCER",
-      createdAt: new Date().toISOString(),
+      title: String(title).trim(),
+      summary: String(summary || description).trim(),
+      description: String(description || summary).trim(),
+      image: String(image || "").trim(),
+      url: String(url || "").trim(),
+      category: String(category || "Football").trim(),
+      source: String(source || "AG SOCCER").trim(),
+      publishedAt: new Date().toISOString(),
     };
 
     news.unshift(article);
     await writeNews(news);
 
-    res.status(201).json({
-      success: true,
-      article,
-    });
+    res.status(201).json({ success: true, article });
   } catch (error) {
-    sendError(res, error);
+    handleError(res, error);
   }
 });
 
-app.put("/api/news/:id", requireAdmin, async (req, res) => {
+app.delete("/api/news/:id", requireAdmin, async (req, res) => {
   try {
     const news = await readNews();
-    const index = news.findIndex(
-      (article) => String(article.id) === req.params.id
-    );
+    const updated = news.filter((item) => String(item.id) !== req.params.id);
 
-    if (index === -1) {
+    if (updated.length === news.length) {
       return res.status(404).json({
         success: false,
-        message: "News article not found",
+        message: "News article not found.",
       });
     }
 
-    const { title, content, image, category, author } = req.body;
-
-    news[index] = {
-      ...news[index],
-      ...(title !== undefined && { title }),
-      ...(content !== undefined && { content }),
-      ...(image !== undefined && { image }),
-      ...(category !== undefined && { category }),
-      ...(author !== undefined && { author }),
-      updatedAt: new Date().toISOString(),
-    };
-
-    await writeNews(news);
-
-    res.json({
-      success: true,
-      article: news[index],
-    });
+    await writeNews(updated);
+    res.json({ success: true, message: "News article deleted." });
   } catch (error) {
-    sendError(res, error);
+    handleError(res, error);
   }
 });
 
-app.delete(
-  "/api/news/:id",
-  requireAdmin,
-  async (req, res) => {
-    try {
-      const news = await readNews();
-      const updated = news.filter(
-        (article) => String(article.id) !== req.params.id
-      );
-
-      if (updated.length === news.length) {
-        return res.status(404).json({
-          success: false,
-          message: "News article not found",
-        });
-      }
-
-      await writeNews(updated);
-
-      res.json({
-        success: true,
-        message: "News article deleted",
-      });
-    } catch (error) {
-      sendError(res, error);
-    }
-  }
-);
-
-// --------------------------------------------------
-// 404 HANDLER
-// --------------------------------------------------
-
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: `Route not found: ${req.method} ${req.originalUrl}`,
-  });
+app.use("/api", (_req, res) => {
+  res.status(404).json({ success: false, message: "API route not found." });
 });
-
-// --------------------------------------------------
-// START SERVER
-// --------------------------------------------------
 
 app.listen(PORT, () => {
-  console.log(`AG SOCCER server running at http://localhost:${PORT}`);
-  console.log(`API-Football key configured: ${API_KEY ? "Yes" : "No"}`);
-  console.log(`Default football season: ${currentSeason()}`);
+  console.log(`AG SOCCER API running at http://localhost:${PORT}`);
+  console.log(`Highlightly key configured: ${Boolean(API_KEY)}`);
+  console.log(`Admin publishing configured: ${Boolean(process.env.ADMIN_KEY)}`);
+  console.log(`Current year: ${CURRENT_YEAR}`);
 });
