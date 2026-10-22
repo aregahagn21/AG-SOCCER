@@ -1,3 +1,4 @@
+
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -9,49 +10,47 @@ import { fileURLToPath } from "node:url";
 dotenv.config();
 
 const app = express();
-const PORT = Number(process.env.PORT || 1000);
-
-const API_BASE =
-  process.env.API_FOOTBALL_BASE_URL ||
-  "https://v3.football.api-sports.io";
-
-const API_KEY = process.env.API_FOOTBALL_KEY || "";
-
-// Set this to a season your subscription supports.
-// Your previously reported free plan supported seasons 2022–2024.
-const DEFAULT_SEASON = Number(
-  process.env.API_FOOTBALL_SEASON || 2026
-);
+const PORT = Number(process.env.PORT || 5000);
+const SPORTScore_BASE = "https://sportscore.com";
+const YEAR = new Date().getFullYear();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "data");
 const NEWS_FILE = path.join(DATA_DIR, "news.json");
 
-app.use(
-  cors({
-    origin: process.env.CLIENT_ORIGIN
-      ? process.env.CLIENT_ORIGIN.split(",").map((x) => x.trim())
-      : true,
-  })
-);
-
+app.use(cors({
+  origin: process.env.CLIENT_ORIGIN
+    ? process.env.CLIENT_ORIGIN.split(",").map(value => value.trim())
+    : true
+}));
 app.use(express.json({ limit: "1mb" }));
 
-// API-Football authentication
-const footballAPI = axios.create({
-  baseURL: API_BASE.replace(/\/$/, ""),
-  timeout: 25000,
-  headers: {
-    "x-apisports-key": API_KEY,
-    Accept: "application/json",
-  },
+const http = axios.create({
+  baseURL: SPORTScore_BASE,
+  timeout: 20000,
+  headers: { Accept: "application/json" }
 });
 
-// Major competitions appear first.
+// SportScore competition slugs.
+// The English Premier League slug has been tested successfully.
+const COMPETITIONS = [
+  { id: "uefa-champions-league", name: "UEFA Champions League", country: "Europe" },
+  { id: "english-premier-league", name: "English Premier League", country: "England" },
+  { id: "spanish-la-liga", name: "Spanish La Liga", country: "Spain" },
+  { id: "italian-serie-a", name: "Italian Serie A", country: "Italy" },
+  { id: "german-bundesliga", name: "German Bundesliga", country: "Germany" },
+  { id: "french-ligue-1", name: "French Ligue 1", country: "France" },
+  { id: "uefa-europa-league", name: "UEFA Europa League", country: "Europe" },
+  { id: "uefa-conference-league", name: "UEFA Conference League", country: "Europe" },
+  { id: "portuguese-primeira-liga", name: "Portuguese Primeira Liga", country: "Portugal" },
+  { id: "dutch-eredivisie", name: "Dutch Eredivisie", country: "Netherlands" },
+  { id: "major-league-soccer", name: "Major League Soccer", country: "USA" }
+];
+
 const PRIORITY = [
   /champions league/i,
   /premier league/i,
-  /la liga|primera division/i,
+  /la liga/i,
   /bundesliga/i,
   /serie a/i,
   /ligue 1/i,
@@ -59,348 +58,252 @@ const PRIORITY = [
   /conference league/i,
   /primeira liga/i,
   /eredivisie/i,
-  /major league soccer/i,
+  /major league soccer/i
 ];
 
-function leagueRank(name) {
-  const index = PRIORITY.findIndex((pattern) =>
+function rank(name) {
+  const index = PRIORITY.findIndex(pattern =>
     pattern.test(String(name || ""))
   );
-
-  return index === -1 ? 999 : index;
+  return index < 0 ? 999 : index;
 }
 
-function numberOrNull(value) {
-  if (value === 0) return 0;
-
-  if (
-    value === null ||
-    value === undefined ||
-    value === "" ||
-    !Number.isFinite(Number(value))
-  ) {
-    return null;
-  }
-
-  return Number(value);
+function asArray(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.matches)) return data.matches;
+  if (Array.isArray(data?.fixtures)) return data.fixtures;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.response)) return data.response;
+  if (Array.isArray(data?.scorers)) return data.scorers;
+  return [];
 }
 
-function getSeason(req) {
-  const season = Number(req.query.season || DEFAULT_SEASON);
+async function getJSON(endpoint, params = {}) {
+  const response = await http.get(endpoint, { params });
 
-  if (!Number.isInteger(season) || season < 2000 || season > 2100) {
-    const error = new Error("Invalid season.");
-    error.status = 400;
-    throw error;
-  }
-
-  return season;
-}
-
-function normalizeStatus(status = {}) {
-  const short = String(
-    typeof status === "object" ? status.short || "" : status
-  ).toUpperCase();
-
-  const long = String(
-    typeof status === "object" ? status.long || "" : ""
-  ).toLowerCase();
-
-  if (["FT", "AET", "PEN"].includes(short)) return "FINISHED";
-
-  if (
-    ["1H", "2H", "ET", "BT", "P", "LIVE"].includes(short)
-  ) {
-    return "IN_PLAY";
-  }
-
-  if (short === "HT") return "PAUSED";
-  if (short === "PST") return "POSTPONED";
-  if (short === "CANC") return "CANCELLED";
-  if (short === "SUSP") return "SUSPENDED";
-  if (short === "ABD") return "ABANDONED";
-
-  if (short === "NS") return "SCHEDULED";
-
-  if (long.includes("finished")) return "FINISHED";
-  if (long.includes("live")) return "IN_PLAY";
-
-  return short || "SCHEDULED";
-}
-
-function normalizeLeague(raw = {}) {
-  const seasons = (raw.seasons || [])
-    .map((item) => Number(item.year))
-    .filter(Number.isFinite)
-    .sort((a, b) => b - a);
-
-  const currentSeason =
-    seasons.find((year) => year >= new Date().getFullYear() - 1) ??
-    null;
-
-  return {
-    id: raw.league?.id ?? raw.id ?? null,
-    name: raw.league?.name ?? raw.name ?? "Unknown competition",
-    type: raw.league?.type ?? raw.type ?? "",
-    code: raw.league?.code ?? raw.code ?? "",
-    logo: raw.league?.logo ?? raw.logo ?? "",
-    emblem: raw.league?.logo ?? raw.logo ?? "",
-    country: raw.country?.name ?? raw.country ?? "",
-    countryCode: raw.country?.code ?? "",
-    seasons: seasons.map((season) => ({ season })),
-    currentSeason,
-    currentSeasonAvailable: currentSeason !== null,
-  };
-}
-
-function normalizeTeam(team = {}) {
-  return {
-    ...team,
-    id: team.id ?? null,
-    name: team.name ?? "Unknown team",
-    shortName: team.code ?? team.name ?? "",
-    logo: team.logo ?? "",
-    crest: team.logo ?? "",
-  };
-}
-
-function normalizeEvent(event = {}) {
-  const time = event.time || {};
-  const type = String(event.type || "").toLowerCase();
-  const detail = String(event.detail || "").toLowerCase();
-
-  let kind = "other";
-
-  if (type === "goal") {
-    kind = "goal";
-  } else if (type === "card") {
-    kind = "card";
-  } else if (type === "subst") {
-    kind = "substitution";
-  }
-
-  return {
-    ...event,
-    kind,
-    type,
-    detail: event.detail ?? "",
-    minute: numberOrNull(time.elapsed),
-    injuryTime: numberOrNull(time.extra),
-    team: event.team
-      ? {
-          id: event.team.id,
-          name: event.team.name,
-          logo: event.team.logo,
-        }
-      : null,
-    player: event.player
-      ? {
-          id: event.player.id,
-          name: event.player.name,
-        }
-      : null,
-    assist: event.assist
-      ? {
-          id: event.assist.id,
-          name: event.assist.name,
-        }
-      : null,
-    scorer:
-      kind === "goal"
-        ? {
-            id: event.player?.id ?? null,
-            name: event.player?.name ?? "Unknown player",
-          }
-        : null,
-    playerIn:
-      kind === "substitution"
-        ? {
-            id: event.assist?.id ?? null,
-            name: event.assist?.name ?? "Unknown player",
-          }
-        : null,
-    playerOut:
-      kind === "substitution"
-        ? {
-            id: event.player?.id ?? null,
-            name: event.player?.name ?? "Unknown player",
-          }
-        : null,
-    card:
-      kind === "card"
-        ? detail
-        : null,
-    goalType:
-      kind === "goal"
-        ? detail
-        : null,
-  };
-}
-
-function normalizeMatch(raw = {}) {
-  const fixture = raw.fixture || {};
-  const teams = raw.teams || {};
-  const goals = raw.goals || {};
-  const score = raw.score || {};
-  const league = normalizeLeague(raw.league || {});
-
-  const homeScore = numberOrNull(goals.home);
-  const awayScore = numberOrNull(goals.away);
-
-  const status = normalizeStatus(fixture.status || raw.status);
-
-  const homeTeam = normalizeTeam(teams.home || {});
-  const awayTeam = normalizeTeam(teams.away || {});
-
-  return {
-    ...raw,
-
-    id: fixture.id ?? raw.id ?? null,
-
-    date: fixture.date ?? raw.date ?? null,
-    utcDate: fixture.date ?? raw.date ?? null,
-
-    timestamp: fixture.timestamp ?? null,
-    venue: fixture.venue ?? null,
-    referee: fixture.referee ?? null,
-
-    league,
-
-    competition: {
-      id: league.id,
-      name: league.name,
-      code: league.code,
-      logo: league.logo,
-      emblem: league.emblem,
-    },
-
-    homeTeam,
-    awayTeam,
-
-    status,
-
-    minute: numberOrNull(fixture.status?.elapsed),
-    injuryTime: null,
-
-    score: {
-      current: {
-        home: homeScore,
-        away: awayScore,
-      },
-      fullTime: {
-        home: numberOrNull(score.fulltime?.home),
-        away: numberOrNull(score.fulltime?.away),
-      },
-      halfTime: {
-        home: numberOrNull(score.halftime?.home),
-        away: numberOrNull(score.halftime?.away),
-      },
-      extraTime: {
-        home: numberOrNull(score.extratime?.home),
-        away: numberOrNull(score.extratime?.away),
-      },
-      penalties: {
-        home: numberOrNull(score.penalty?.home),
-        away: numberOrNull(score.penalty?.away),
-      },
-    },
-
-    goals: [],
-    events: [],
-    bookings: [],
-    substitutions: [],
-    lineups: null,
-  };
-}
-
-function isLive(match) {
-  return [
-    "IN_PLAY",
-    "PAUSED",
-    "EXTRA_TIME",
-    "PENALTY_SHOOTOUT",
-  ].includes(match.status);
-}
-
-async function get(endpoint, params = {}) {
-  if (!API_KEY) {
-    const error = new Error(
-      "API_FOOTBALL_KEY is missing. Add it to your server .env file or Render environment variables."
+  if (response.data?.error) {
+    const error = response.data.error;
+    throw new Error(
+      typeof error === "string" ? error : JSON.stringify(error)
     );
-
-    error.status = 503;
-    throw error;
-  }
-
-  const response = await footballAPI.get(endpoint, { params });
-
-  if (response.data?.errors) {
-    const details = response.data.errors;
-    const message =
-      typeof details === "object"
-        ? JSON.stringify(details)
-        : String(details);
-
-    const error = new Error(message);
-    error.status = 502;
-    throw error;
   }
 
   return response.data;
 }
 
-function apiError(res, error) {
-  const status =
-    error.status ||
-    error.response?.status ||
-    502;
+function slugFromUrl(url = "") {
+  const match = String(url).match(/\/football\/match\/([^/]+)\//i);
+  return match?.[1] || "";
+}
 
-  const providerMessage =
-    error.response?.data?.errors ||
-    error.response?.data?.message ||
-    error.message ||
-    "Unknown API error";
+function normalizeStatus(raw = {}) {
+  const value = String(
+    typeof raw === "string"
+      ? raw
+      : raw.status_text || raw.status || raw.short || ""
+  ).toLowerCase();
 
-  console.error("API-Football request failed:", providerMessage);
+  if (/live|1st half|2nd half|first half|second half|extra time|in progress/.test(value)) {
+    return "IN_PLAY";
+  }
+  if (/half time|halftime|break/.test(value)) return "PAUSED";
+  if (/finished|full time|ft|after penalties|ended/.test(value)) {
+    return "FINISHED";
+  }
+  if (/postponed/.test(value)) return "POSTPONED";
+  if (/cancelled|canceled|abandoned/.test(value)) return "CANCELLED";
+  if (/suspended/.test(value)) return "SUSPENDED";
 
-  res.status(status >= 400 && status < 500 ? status : 502).json({
-    success: false,
-    message:
-      typeof providerMessage === "object"
-        ? JSON.stringify(providerMessage)
-        : String(providerMessage),
-    providerStatus: error.response?.status ?? null,
+  return "SCHEDULED";
+}
+
+function normalizeMatch(raw = {}) {
+  const home = raw.homeTeam || raw.teams?.home || {};
+  const away = raw.awayTeam || raw.teams?.away || {};
+
+  const homeName =
+    typeof raw.home === "string"
+      ? raw.home
+      : home.name || raw.home_name || "Home team";
+
+  const awayName =
+    typeof raw.away === "string"
+      ? raw.away
+      : away.name || raw.away_name || "Away team";
+
+  const url = raw.url || "";
+  const slug = raw.slug || slugFromUrl(url) || raw.id || "";
+
+  const homeScore =
+    raw.home_score ?? raw.goals?.home ?? raw.score?.home ?? null;
+  const awayScore =
+    raw.away_score ?? raw.goals?.away ?? raw.score?.away ?? null;
+
+  const date = raw.time || raw.date || raw.utcDate || raw.fixture?.date || null;
+  const status = normalizeStatus(raw);
+
+  const homeTeam = {
+    id: home.slug || raw.home_slug || homeName.toLowerCase().replace(/\s+/g, "-"),
+    name: homeName,
+    shortName: homeName,
+    logo: raw.home_logo || home.logo || home.crest || "",
+    crest: raw.home_logo || home.logo || home.crest || ""
+  };
+
+  const awayTeam = {
+    id: away.slug || raw.away_slug || awayName.toLowerCase().replace(/\s+/g, "-"),
+    name: awayName,
+    shortName: awayName,
+    logo: raw.away_logo || away.logo || away.crest || "",
+    crest: raw.away_logo || away.crest || away.logo || ""
+  };
+
+  const competitionName =
+    raw.competition || raw.league?.name || raw.competition_name || "Football";
+
+  const incidents = Array.isArray(raw.incidents) ? raw.incidents : [];
+
+  const events = incidents.map((event, index) => {
+    const type = String(event.type || "Event").toLowerCase();
+    const isGoal = /goal|penalty/.test(type);
+    const isCard = /card/.test(type);
+    const isSubstitution = /substitution/.test(type);
+
+    return {
+      ...event,
+      id: event.id ?? index,
+      type: event.type || "Event",
+      kind: isGoal
+        ? "goal"
+        : isCard
+          ? "card"
+          : isSubstitution
+            ? "substitution"
+            : "other",
+      minute: event.time ?? event.minute ?? null,
+      player: event.player ? { name: event.player } : null,
+      team:
+        event.side === "home"
+          ? homeTeam
+          : event.side === "away"
+            ? awayTeam
+            : null,
+      playerIn: event.player_in ? { name: event.player_in } : null,
+      playerOut: event.player_out ? { name: event.player_out } : null
+    };
+  });
+
+  return {
+    ...raw,
+    id: String(slug),
+    slug: String(slug),
+    url,
+    date,
+    utcDate: date,
+    timestamp: date ? Math.floor(new Date(date).getTime() / 1000) : null,
+
+    competition: {
+      id: raw.competition_slug || raw.competition?.slug ||
+        competitionName.toLowerCase().replace(/\s+/g, "-"),
+      name: competitionName,
+      logo: raw.competition_logo || raw.league?.logo || "",
+      emblem: raw.competition_logo || raw.league?.logo || ""
+    },
+
+    league: {
+      id: raw.competition_slug || raw.competition?.slug ||
+        competitionName.toLowerCase().replace(/\s+/g, "-"),
+      name: competitionName,
+      logo: raw.competition_logo || "",
+      emblem: raw.competition_logo || "",
+      season: YEAR
+    },
+
+    homeTeam,
+    awayTeam,
+    status,
+    minute: raw.live_minute ?? raw.minute ?? null,
+
+    state: {
+      description: status,
+      short: raw.status_text || raw.status || "",
+      elapsed: raw.live_minute ?? null
+    },
+
+    score: {
+      current: {
+        home: homeScore === null || homeScore === "" ? null : Number(homeScore),
+        away: awayScore === null || awayScore === "" ? null : Number(awayScore)
+      },
+      fullTime: {
+        home: status === "FINISHED" && homeScore !== null
+          ? Number(homeScore)
+          : null,
+        away: status === "FINISHED" && awayScore !== null
+          ? Number(awayScore)
+          : null
+      },
+      halfTime: { home: null, away: null }
+    },
+
+    goals: events.filter(event => event.kind === "goal"),
+    events,
+    bookings: events.filter(event => event.kind === "card"),
+    substitutions: events.filter(event => event.kind === "substitution"),
+    lineups: raw.lineups || null
+  };
+}
+
+function normalizeScorer(raw = {}, index = 0) {
+  return {
+    ...raw,
+    rank: raw.rank ?? index + 1,
+
+    player: {
+      id: raw.player_slug || raw.player?.slug || "",
+      name: typeof raw.player === "string"
+        ? raw.player
+        : raw.player?.name || "Unknown player",
+      photo: raw.player_logo || raw.player?.logo || "",
+      logo: raw.player_logo || raw.player?.logo || ""
+    },
+
+    team: {
+      id: raw.team_slug || raw.team?.slug || "",
+      name: typeof raw.team === "string"
+        ? raw.team
+        : raw.team?.name || "Unknown team",
+      logo: raw.team_logo || raw.team?.logo || ""
+    },
+
+    goals: Number(raw.goals ?? raw.goals_count ?? 0),
+    assists: Number(raw.assists ?? 0),
+    appearances: Number(raw.matches ?? raw.appearances ?? 0),
+    minutes: Number(raw.minutes ?? 0)
+  };
+}
+
+async function getStandings(slug) {
+  return getJSON("/api/widget/standings/", {
+    sport: "football",
+    slug
   });
 }
 
-function admin(req, res, next) {
-  const key = process.env.ADMIN_KEY;
-
-  if (!key) {
-    return res.status(503).json({
-      success: false,
-      message: "Set ADMIN_KEY in your environment to enable publishing.",
-    });
-  }
-
-  if (req.get("x-admin-key") !== key) {
-    return res.status(401).json({
-      success: false,
-      message: "Invalid admin key.",
-    });
-  }
-
-  next();
+async function getMatchDetails(slug) {
+  return getJSON("/api/widget/match/", {
+    sport: "football",
+    slug
+  });
 }
 
+// News file management
 async function readNews() {
   await fs.mkdir(DATA_DIR, { recursive: true });
 
   try {
-    const data = await fs.readFile(NEWS_FILE, "utf8");
-    const news = JSON.parse(data);
-
-    return Array.isArray(news) ? news : [];
+    const data = JSON.parse(await fs.readFile(NEWS_FILE, "utf8"));
+    return Array.isArray(data) ? data : [];
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
 
@@ -409,541 +312,503 @@ async function readNews() {
   }
 }
 
-async function writeNews(news) {
+async function writeNews(items) {
   await fs.mkdir(DATA_DIR, { recursive: true });
-
-  await fs.writeFile(
-    NEWS_FILE,
-    JSON.stringify(news, null, 2)
-  );
+  await fs.writeFile(NEWS_FILE, JSON.stringify(items, null, 2));
 }
 
-// -----------------------------------------------------
-// HEALTH AND TEST
-// -----------------------------------------------------
+function admin(req, res, next) {
+  const key = process.env.ADMIN_KEY;
 
+  if (!key) {
+    return res.status(503).json({
+      success: false,
+      message: "Set ADMIN_KEY to enable publishing."
+    });
+  }
+
+  if (req.get("x-admin-key") !== key) {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid admin key."
+    });
+  }
+
+  next();
+}
+
+function handleError(res, error) {
+  console.error(
+    "SportScore request failed:",
+    error.response?.status,
+    error.message
+  );
+
+  res.status(error.response?.status || 502).json({
+    success: false,
+    message: error.message || "SportScore request failed."
+  });
+}
+
+// Home and health
 app.get("/", (_req, res) => {
   res.json({
     success: true,
     message: "Welcome to AG SOCCER API ⚽",
-    provider: "API-Football",
+    provider: "SportScore"
   });
 });
 
 app.get("/api/health", (_req, res) => {
   res.json({
     success: true,
-    provider: "API-Football",
-    apiKeyConfigured: Boolean(API_KEY),
+    provider: "SportScore",
     adminConfigured: Boolean(process.env.ADMIN_KEY),
-    defaultSeason: DEFAULT_SEASON,
+    currentYear: YEAR
   });
 });
 
-app.get("/api/test", async (_req, res) => {
-  try {
-    const data = await get("/status");
+// Competitions
+function sendCompetitions(_req, res) {
+  const leagues = [...COMPETITIONS].sort(
+    (a, b) => rank(a.name) - rank(b.name)
+  );
 
-    res.json({
-      success: true,
-      provider: "API-Football",
-      response: data.response,
-      results: data.results,
-      errors: data.errors,
-    });
-  } catch (error) {
-    apiError(res, error);
-  }
-});
-
-// -----------------------------------------------------
-// LEAGUES AND COMPETITIONS
-// -----------------------------------------------------
-
-async function sendLeagues(req, res) {
-  try {
-    const params = {};
-
-    if (req.query.country) params.country = req.query.country;
-    if (req.query.season) params.season = getSeason(req);
-    if (req.query.search) params.search = req.query.search;
-    if (req.query.id) params.id = Number(req.query.id);
-
-    const data = await get("/leagues", params);
-
-    const leagues = (data.response || [])
-      .map((item) => normalizeLeague(item))
-      .sort(
-        (a, b) =>
-          leagueRank(a.name) - leagueRank(b.name) ||
-          a.name.localeCompare(b.name)
-      );
-
-    res.json({
-      success: true,
-      count: leagues.length,
-      leagues,
-      competitions: leagues,
-    });
-  } catch (error) {
-    apiError(res, error);
-  }
+  res.json({
+    success: true,
+    count: leagues.length,
+    leagues,
+    competitions: leagues
+  });
 }
 
-app.get("/api/leagues", sendLeagues);
-app.get("/api/competitions", sendLeagues);
+app.get("/api/leagues", sendCompetitions);
+app.get("/api/competitions", sendCompetitions);
 
-app.get("/api/leagues/:id", async (req, res) => {
-  try {
-    const data = await get("/leagues", {
-      id: Number(req.params.id),
-      season: getSeason(req),
+app.get("/api/leagues/:id", (req, res) => {
+  const league = COMPETITIONS.find(item => item.id === req.params.id);
+
+  if (!league) {
+    return res.status(404).json({
+      success: false,
+      message: "Competition slug not found. Use /api/leagues to see supported competitions."
     });
-
-    const item = data.response?.[0];
-
-    if (!item) {
-      return res.status(404).json({
-        success: false,
-        message: "Competition not found.",
-      });
-    }
-
-    res.json({
-      success: true,
-      league: normalizeLeague(item),
-    });
-  } catch (error) {
-    apiError(res, error);
   }
+
+  res.json({ success: true, league });
 });
 
-// -----------------------------------------------------
-// MATCHES FOR A DATE
-// -----------------------------------------------------
-
+// Fixtures for a date
 app.get("/api/matches", async (req, res) => {
   try {
-    const date =
-      /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || "")
-        ? req.query.date
-        : new Date().toISOString().slice(0, 10);
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || "")
+      ? req.query.date
+      : new Date().toISOString().slice(0, 10);
 
     const params = {
       date,
-      timezone: req.query.timezone || "Africa/Addis_Ababa",
+      limit: Math.min(Number(req.query.limit) || 200, 200)
     };
 
-    if (req.query.leagueId) {
-      params.league = Number(req.query.leagueId);
-      params.season = getSeason(req);
+    if (req.query.leagueId || req.query.competition) {
+      params.competition = String(req.query.leagueId || req.query.competition);
     }
 
-    const data = await get("/fixtures", params);
+    if (req.query.team) params.team = String(req.query.team);
+    if (req.query.status) params.status = String(req.query.status);
 
-    const matches = (data.response || [])
+    const data = await getJSON("/api/v1/fixtures/", params);
+
+    const matches = asArray(data)
       .map(normalizeMatch)
-      .sort(
-        (a, b) =>
-          leagueRank(a.competition.name) -
-            leagueRank(b.competition.name) ||
-          new Date(a.utcDate) - new Date(b.utcDate)
+      .sort((a, b) =>
+        rank(a.competition?.name) - rank(b.competition?.name) ||
+        new Date(a.date || 0) - new Date(b.date || 0)
+      );
+
+    res.json({ success: true, date, count: matches.length, matches });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+// Live matches
+async function sendLiveMatches(_req, res) {
+  try {
+    const data = await getJSON("/api/v1/fixtures/", {
+      status: "live",
+      limit: 200
+    });
+
+    const matches = asArray(data)
+      .map(normalizeMatch)
+      .filter(match =>
+        match.status === "IN_PLAY" || match.status === "PAUSED"
+      )
+      .sort((a, b) =>
+        rank(a.competition?.name) - rank(b.competition?.name)
       );
 
     res.json({
       success: true,
-      date,
+      date: new Date().toISOString().slice(0, 10),
       count: matches.length,
-      matches,
+      matches
     });
   } catch (error) {
-    apiError(res, error);
+    handleError(res, error);
   }
-});
+}
 
-// -----------------------------------------------------
-// LIVE MATCHES
-// -----------------------------------------------------
+app.get("/api/live", sendLiveMatches);
+app.get("/api/matches/live", sendLiveMatches);
 
-app.get("/api/live", async (_req, res) => {
-  try {
-    const data = await get("/fixtures", {
-      live: "all",
-      timezone: "Africa/Addis_Ababa",
-    });
-
-    const matches = (data.response || [])
-      .map(normalizeMatch)
-      .filter(isLive)
-      .sort(
-        (a, b) =>
-          leagueRank(a.competition.name) -
-          leagueRank(b.competition.name)
-      );
-
-    res.json({
-      success: true,
-      count: matches.length,
-      matches,
-    });
-  } catch (error) {
-    apiError(res, error);
-  }
-});
-
-app.get("/api/matches/live", async (_req, res) => {
-  try {
-    const data = await get("/fixtures", {
-      live: "all",
-      timezone: "Africa/Addis_Ababa",
-    });
-
-    const matches = (data.response || [])
-      .map(normalizeMatch)
-      .filter(isLive);
-
-    res.json({
-      success: true,
-      count: matches.length,
-      matches,
-    });
-  } catch (error) {
-    apiError(res, error);
-  }
-});
-
-// -----------------------------------------------------
-// MATCH EVENTS
-// -----------------------------------------------------
-
+// Match events
 app.get("/api/matches/:id/events", async (req, res) => {
   try {
-    const data = await get("/fixtures/events", {
-      fixture: Number(req.params.id),
-    });
-
-    const events = (data.response || []).map(normalizeEvent);
+    const data = await getMatchDetails(req.params.id);
+    const raw = data.match || data;
+    const match = normalizeMatch(raw);
+    const events = match.events || [];
 
     res.json({
       success: true,
-      count: events.length,
       events,
-      goals: events.filter((event) => event.kind === "goal"),
-      bookings: events.filter((event) => event.kind === "card"),
-      substitutions: events.filter(
-        (event) => event.kind === "substitution"
-      ),
+      goals: events.filter(event => event.kind === "goal"),
+      bookings: events.filter(event => event.kind === "card"),
+      substitutions: events.filter(event => event.kind === "substitution")
     });
   } catch (error) {
-    apiError(res, error);
+    handleError(res, error);
   }
 });
 
-// -----------------------------------------------------
-// LINEUPS
-// -----------------------------------------------------
-
+// Match lineups
 app.get("/api/matches/:id/lineups", async (req, res) => {
   try {
-    const data = await get("/fixtures/lineups", {
-      fixture: Number(req.params.id),
-    });
+    const data = await getMatchDetails(req.params.id);
+    const raw = data.match || data;
 
     res.json({
       success: true,
-      lineups: data.response || [],
+      lineups: raw.lineups || null
     });
   } catch (error) {
-    apiError(res, error);
+    handleError(res, error);
   }
 });
 
-// -----------------------------------------------------
-// MATCH STATISTICS
-// -----------------------------------------------------
-
+// Match statistics
 app.get("/api/matches/:id/statistics", async (req, res) => {
   try {
-    const data = await get("/fixtures/statistics", {
-      fixture: Number(req.params.id),
-    });
+    const data = await getMatchDetails(req.params.id);
+    const raw = data.match || data;
 
     res.json({
       success: true,
-      statistics: data.response || [],
+      statistics: raw.stats || []
     });
   } catch (error) {
-    apiError(res, error);
+    handleError(res, error);
   }
 });
 
-// -----------------------------------------------------
-// COMPLETE MATCH DETAILS
-// -----------------------------------------------------
-
+// Full match details
 app.get("/api/matches/:id", async (req, res) => {
   try {
-    const id = Number(req.params.id);
+    const data = await getMatchDetails(req.params.id);
+    const raw = data.match || data;
 
-    const [fixtureData, eventResult, lineupResult, statsResult] =
-      await Promise.allSettled([
-        get("/fixtures", { id }),
-        get("/fixtures/events", { fixture: id }),
-        get("/fixtures/lineups", { fixture: id }),
-        get("/fixtures/statistics", { fixture: id }),
-      ]);
-
-    if (fixtureData.status !== "fulfilled") {
-      throw fixtureData.reason;
-    }
-
-    const raw = fixtureData.value.response?.[0];
-
-    if (!raw) {
+    if (!raw.home || !raw.away) {
       return res.status(404).json({
         success: false,
-        message: "Match not found.",
+        message: "Match details were not found."
       });
     }
 
     const match = normalizeMatch(raw);
 
-    const events =
-      eventResult.status === "fulfilled"
-        ? (eventResult.value.response || []).map(normalizeEvent)
-        : [];
-
-    const lineups =
-      lineupResult.status === "fulfilled"
-        ? lineupResult.value.response || []
-        : [];
-
-    const statistics =
-      statsResult.status === "fulfilled"
-        ? statsResult.value.response || []
-        : [];
-
-    match.events = events;
-    match.goals = events.filter((event) => event.kind === "goal");
-    match.bookings = events.filter((event) => event.kind === "card");
-    match.substitutions = events.filter(
-      (event) => event.kind === "substitution"
-    );
-    match.lineups = lineups;
-    match.statistics = statistics;
-
     res.json({
       success: true,
       match,
       details: {
-        events: eventResult.status === "fulfilled",
-        lineups: lineupResult.status === "fulfilled",
-        statistics: statsResult.status === "fulfilled",
-      },
+        events: Array.isArray(raw.incidents),
+        lineups: Boolean(raw.lineups),
+        statistics: Array.isArray(raw.stats)
+      }
     });
   } catch (error) {
-    apiError(res, error);
+    handleError(res, error);
   }
 });
 
-// -----------------------------------------------------
-// LEAGUE STANDINGS
-// -----------------------------------------------------
-
+// Standings
 app.get("/api/leagues/:id/standings", async (req, res) => {
   try {
-    const season = getSeason(req);
+    const data = await getStandings(req.params.id);
+    const tables = data.tables || [];
 
-    const data = await get("/standings", {
-      league: Number(req.params.id),
-      season,
-    });
-
-    const leagueData = data.response?.[0];
+    const standings = tables.map(table =>
+      (table.rows || []).map(row => ({
+        rank: row.pos,
+        position: row.pos,
+        team: {
+          id: row.team_slug,
+          name: row.team,
+          logo: row.team_logo || ""
+        },
+        played: row.p,
+        won: row.w,
+        draw: row.d,
+        lost: row.l,
+        goalsFor: row.gf,
+        goalsAgainst: row.ga,
+        goalDifference: row.gd,
+        points: row.pts,
+        form: row.form || null,
+        description: row.promo_name || null
+      }))
+    );
 
     res.json({
       success: true,
-      league: leagueData?.league
-        ? normalizeLeague(leagueData)
-        : { id: Number(req.params.id) },
-      season,
-      standings: leagueData?.league?.standings || [],
+      league: {
+        id: data.competition_slug || req.params.id,
+        name: data.competition || req.params.id,
+        logo: data.competition_logo || ""
+      },
+      season: YEAR,
+      tables,
+      standings
     });
   } catch (error) {
-    apiError(res, error);
+    handleError(res, error);
   }
 });
 
 app.get("/api/standings/:id", async (req, res) => {
   try {
-    const season = getSeason(req);
+    const data = await getStandings(req.params.id);
+    const tables = data.tables || [];
 
-    const data = await get("/standings", {
-      league: Number(req.params.id),
-      season,
-    });
-
-    res.json({
-      success: true,
-      season,
-      standings: data.response?.[0]?.league?.standings || [],
-    });
-  } catch (error) {
-    apiError(res, error);
-  }
-});
-
-// -----------------------------------------------------
-// LEAGUE MATCHES
-// -----------------------------------------------------
-
-app.get("/api/leagues/:id/matches", async (req, res) => {
-  try {
-    const season = getSeason(req);
-
-    const data = await get("/fixtures", {
-      league: Number(req.params.id),
-      season,
-      timezone: "Africa/Addis_Ababa",
-    });
-
-    const matches = (data.response || [])
-      .map(normalizeMatch)
-      .sort(
-        (a, b) =>
-          new Date(a.utcDate) - new Date(b.utcDate)
-      );
-
-    res.json({
-      success: true,
-      season,
-      count: matches.length,
-      matches,
-    });
-  } catch (error) {
-    apiError(res, error);
-  }
-});
-
-// -----------------------------------------------------
-// TEAMS
-// -----------------------------------------------------
-
-app.get("/api/teams", async (req, res) => {
-  try {
-    const params = {};
-
-    if (req.query.leagueId) {
-      params.league = Number(req.query.leagueId);
-      params.season = getSeason(req);
-    }
-
-    if (req.query.season && !params.season) {
-      params.season = getSeason(req);
-    }
-
-    if (req.query.search) {
-      params.search = req.query.search;
-    }
-
-    if (req.query.country) {
-      params.country = req.query.country;
-    }
-
-    const data = await get("/teams", params);
-
-    const teams = (data.response || []).map((item) =>
-      normalizeTeam(item.team || item)
+    const standings = tables.map(table =>
+      (table.rows || []).map(row => ({
+        rank: row.pos,
+        position: row.pos,
+        team: {
+          id: row.team_slug,
+          name: row.team,
+          logo: row.team_logo || ""
+        },
+        played: row.p,
+        won: row.w,
+        draw: row.d,
+        lost: row.l,
+        goalsFor: row.gf,
+        goalsAgainst: row.ga,
+        goalDifference: row.gd,
+        points: row.pts,
+        form: row.form || null,
+        description: row.promo_name || null
+      }))
     );
 
     res.json({
       success: true,
-      count: teams.length,
-      teams,
+      league: {
+        id: data.competition_slug || req.params.id,
+        name: data.competition || req.params.id,
+        logo: data.competition_logo || ""
+      },
+      season: YEAR,
+      tables,
+      standings
     });
   } catch (error) {
-    apiError(res, error);
+    handleError(res, error);
   }
 });
 
-app.get("/api/teams/:id", async (req, res) => {
+// Matches for a competition on a given date
+app.get("/api/leagues/:id/matches", async (req, res) => {
   try {
-    const data = await get("/teams", {
-      id: Number(req.params.id),
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || "")
+      ? req.query.date
+      : new Date().toISOString().slice(0, 10);
+
+    const data = await getJSON("/api/v1/fixtures/", {
+      date,
+      competition: req.params.id,
+      limit: Math.min(Number(req.query.limit) || 200, 200)
     });
 
-    const item = data.response?.[0];
+    const matches = asArray(data).map(normalizeMatch);
 
-    if (!item) {
-      return res.status(404).json({
-        success: false,
-        message: "Team not found.",
+    res.json({
+      success: true,
+      league: COMPETITIONS.find(item => item.id === req.params.id) ||
+        { id: req.params.id },
+      season: YEAR,
+      date,
+      count: matches.length,
+      matches
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+// Team search
+app.get("/api/teams", async (req, res) => {
+  try {
+    const search = String(req.query.search || "").trim();
+
+    if (!search) {
+      return res.json({
+        success: true,
+        count: 0,
+        teams: [],
+        message: "Enter ?search=team-name to search for teams."
       });
     }
 
-    res.json({
-      success: true,
-      team: normalizeTeam(item.team || item),
+    const data = await getJSON("/api/v1/search/", {
+      q: search,
+      sport: "football",
+      limit: 20
     });
+
+    const teams = (data.teams || []).map(team => ({
+      id: team.slug || team.id,
+      slug: team.slug || "",
+      name: team.name,
+      logo: team.logo || "",
+      crest: team.logo || "",
+      country: team.country || ""
+    }));
+
+    res.json({ success: true, count: teams.length, teams });
   } catch (error) {
-    apiError(res, error);
+    handleError(res, error);
   }
 });
 
-app.get("/api/leagues/:id/teams", async (req, res) => {
+// Team details and fixtures
+app.get("/api/teams/:id", async (req, res) => {
   try {
-    const season = getSeason(req);
-
-    const data = await get("/teams", {
-      league: Number(req.params.id),
-      season,
+    const data = await getJSON("/api/widget/team/", {
+      sport: "football",
+      slug: req.params.id,
+      limit: 10
     });
 
-    const teams = (data.response || []).map((item) =>
-      normalizeTeam(item.team || item)
+    res.json({
+      success: true,
+      team: data.team || data,
+      matches: data.matches || []
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+// Teams listed in a competition's standings
+app.get("/api/leagues/:id/teams", async (req, res) => {
+  try {
+    const data = await getStandings(req.params.id);
+
+    const teams = (data.tables || []).flatMap(table =>
+      (table.rows || []).map(row => ({
+        id: row.team_slug,
+        slug: row.team_slug,
+        name: row.team,
+        logo: row.team_logo || "",
+        crest: row.team_logo || ""
+      }))
     );
 
     res.json({
       success: true,
-      season,
+      league: data.competition || req.params.id,
       count: teams.length,
-      teams,
+      teams
     });
   } catch (error) {
-    apiError(res, error);
+    handleError(res, error);
   }
 });
 
-// -----------------------------------------------------
-// TOP SCORERS
-// -----------------------------------------------------
-
+// Top scorers and assists
 app.get("/api/leagues/:id/scorers", async (req, res) => {
   try {
-    const season = getSeason(req);
-
-    const data = await get("/players/topscorers", {
-      league: Number(req.params.id),
-      season,
+    const data = await getJSON("/api/widget/topscorers/", {
+      sport: "football",
+      slug: req.params.id,
+      limit: Math.min(Number(req.query.limit) || 20, 50),
+      stat: req.query.stat || "goals"
     });
 
-    const scorers = data.response || [];
+    const scorers = (data.scorers || []).map(normalizeScorer);
 
     res.json({
       success: true,
-      season,
+      league: data.competition || req.params.id,
+      season: YEAR,
       count: scorers.length,
-      scorers,
+      scorers
     });
   } catch (error) {
-    apiError(res, error);
+    handleError(res, error);
   }
 });
 
-// -----------------------------------------------------
-// NEWS
-// -----------------------------------------------------
+app.get("/api/scorers/:id", async (req, res) => {
+  try {
+    const data = await getJSON("/api/widget/topscorers/", {
+      sport: "football",
+      slug: req.params.id,
+      limit: Math.min(Number(req.query.limit) || 20, 50),
+      stat: req.query.stat || "goals"
+    });
 
+    const scorers = (data.scorers || []).map(normalizeScorer);
+
+    res.json({
+      success: true,
+      league: data.competition || req.params.id,
+      count: scorers.length,
+      scorers
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+// Search teams, competitions, and players
+app.get("/api/search", async (req, res) => {
+  try {
+    const q = String(req.query.q || req.query.search || "").trim();
+
+    if (!q) {
+      return res.status(400).json({
+        success: false,
+        message: "Provide a search term using ?q=..."
+      });
+    }
+
+    const data = await getJSON("/api/v1/search/", {
+      q,
+      sport: "football",
+      limit: 20
+    });
+
+    res.json({ success: true, ...data });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+// News — public list
 app.get("/api/news", async (_req, res) => {
   try {
     const news = (await readNews()).sort(
@@ -952,25 +817,20 @@ app.get("/api/news", async (_req, res) => {
         new Date(a.publishedAt || a.createdAt || 0)
     );
 
-    res.json({
-      success: true,
-      count: news.length,
-      news,
-    });
+    res.json({ success: true, count: news.length, news });
   } catch (error) {
-    apiError(res, error);
+    handleError(res, error);
   }
 });
 
+// News — admin publishing
 app.post("/api/news", admin, async (req, res) => {
   try {
     const body = req.body || {};
-
     const title = String(body.title || "").trim();
     const excerpt = String(
       body.excerpt || body.summary || body.description || ""
     ).trim();
-
     const articleBody = String(
       body.body || body.description || excerpt
     ).trim();
@@ -978,7 +838,7 @@ app.post("/api/news", admin, async (req, res) => {
     if (!title || !excerpt) {
       return res.status(400).json({
         success: false,
-        message: "A title and summary are required.",
+        message: "A title and summary are required."
       });
     }
 
@@ -995,7 +855,7 @@ app.post("/api/news", admin, async (req, res) => {
       image: String(body.image || body.imageUrl || "").trim(),
       url: String(body.url || "").trim(),
       category: String(body.category || "Football"),
-      publishedAt: new Date().toISOString(),
+      publishedAt: new Date().toISOString()
     };
 
     news.unshift(article);
@@ -1004,25 +864,25 @@ app.post("/api/news", admin, async (req, res) => {
     res.status(201).json({
       success: true,
       news: article,
-      article,
+      article
     });
   } catch (error) {
-    apiError(res, error);
+    handleError(res, error);
   }
 });
 
+// News — admin deletion
 app.delete("/api/news/:id", admin, async (req, res) => {
   try {
-    const news = await readNews();
-
-    const updated = news.filter(
-      (item) => String(item.id) !== req.params.id
+    const items = await readNews();
+    const updated = items.filter(
+      item => String(item.id) !== req.params.id
     );
 
-    if (updated.length === news.length) {
+    if (updated.length === items.length) {
       return res.status(404).json({
         success: false,
-        message: "News article not found.",
+        message: "News article not found."
       });
     }
 
@@ -1030,31 +890,24 @@ app.delete("/api/news/:id", admin, async (req, res) => {
 
     res.json({
       success: true,
-      message: "News article deleted.",
+      message: "News article deleted."
     });
   } catch (error) {
-    apiError(res, error);
+    handleError(res, error);
   }
 });
 
-// -----------------------------------------------------
-// UNKNOWN API ROUTES
-// -----------------------------------------------------
-
+// Unknown API route
 app.use("/api", (_req, res) => {
   res.status(404).json({
     success: false,
-    message: "API route not found.",
+    message: "API route not found."
   });
 });
 
-// -----------------------------------------------------
-// START SERVER
-// -----------------------------------------------------
-
-app.listen(PORT, () => {
+// Start server
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`AG SOCCER API running on port ${PORT}`);
-  console.log(`Provider: API-Football`);
-  console.log(`API key configured: ${Boolean(API_KEY)}`);
-  console.log(`Default season: ${DEFAULT_SEASON}`);
+  console.log("Football data provider: SportScore");
+  console.log(`Admin key configured: ${Boolean(process.env.ADMIN_KEY)}`);
 });
