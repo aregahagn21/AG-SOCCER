@@ -20,7 +20,7 @@ const API_KEY = process.env.API_FOOTBALL_KEY || "";
 // Set this to a season your subscription supports.
 // Your previously reported free plan supported seasons 2022–2024.
 const DEFAULT_SEASON = Number(
-  process.env.API_FOOTBALL_SEASON || 2024
+  process.env.API_FOOTBALL_SEASON || 2026
 );
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
