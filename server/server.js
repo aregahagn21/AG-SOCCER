@@ -10,7 +10,7 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT || 5000);
 const API_BASE = (process.env.API_FOOTBALL_KEY || "https://v3.football.api-sports.io").replace(/\/$/, "");
-const API_KEY = process.env.HIGHLIGHTLY_API_KEY || process.env.RAPIDAPI_KEY || process.env.API_KEY || "";
+const API_KEY = process.env.API_FOOTBALL_KEY || process.env.RAPIDAPI_KEY || process.env.API_KEY || "";
 const RAPIDAPI_HOST = process.env.HIGHLIGHTLY_RAPIDAPI_HOST || "soccer.highlightly.net";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "data");
