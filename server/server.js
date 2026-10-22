@@ -17,7 +17,19 @@ const YEAR = new Date().getFullYear();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "data");
 const NEWS_FILE = path.join(DATA_DIR, "news.json");
+import cors from "cors";
 
+// After creating your Express app:
+app.use(
+  cors({
+    origin: [
+      "https://ag-soccer.vercel.app",
+      "http://localhost:5173",
+    ],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-admin-key"],
+  })
+);
 app.use(cors({
   origin: process.env.CLIENT_ORIGIN
     ? process.env.CLIENT_ORIGIN.split(",").map(value => value.trim())
