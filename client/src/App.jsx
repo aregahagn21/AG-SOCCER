@@ -1,948 +1,1265 @@
-
-import { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
 
-const API_BASE = (
-  import.meta.env.VITE_API_BASE || "https://ag-soccer1-3.onrender.com"
-).replace(/\/$/, "");
+function getLiveMinute(match) {
 
-const NAV_ITEMS = [
-  { id: "home", label: "Matches", icon: "⚽" },
-  { id: "live", label: "Live", icon: "🔴" },
-  { id: "leagues", label: "Leagues", icon: "🏆" },
-  { id: "news", label: "News", icon: "📰" },
-];
+  // Use the official minute if the API provides one.
 
-async function apiRequest(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, options);
+  if (typeof match.minute === "number") {
+
+    return match.minute;
+
+  }
+
+
+
+  // Estimate elapsed time only for matches marked as live.
+
+  if (match.status !== "IN_PLAY" || !match.utcDate) {
+
+    return null;
+
+  }
+
+
+
+  const kickoff = new Date(match.utcDate).getTime();
+
+  const now = Date.now();
+
+
+
+  if (!Number.isFinite(kickoff) || now < kickoff) {
+
+    return null;
+
+  }
+
+
+
+  return Math.floor((now - kickoff) / 60000);
+
+}
+
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || "http://localhost:5000").replace(/\/$/, "");
+
+const PRIORITY = ["CL", "PL", "PD", "BL1", "SA", "FL1", "EL", "PPL", "DED", "BSA"];
+const COMPETITION_PRIORITY = ["UEFA Champions League", "Champions League", "Premier League", "LaLiga", "Primera Division", "Bundesliga", "Serie A", "Ligue 1", "UEFA Europa League", "Europa League", "Primeira Liga", "Eredivisie", "Major League Soccer"];
+function competitionRank(match) {
+  const code = String(match.competition?.code || "").toUpperCase();
+  const name = String(match.competition?.name || match.league?.name || "").toLowerCase();
+  const codeIndex = PRIORITY.indexOf(code);
+  if (codeIndex >= 0) return codeIndex;
+  const nameIndex = COMPETITION_PRIORITY.findIndex((item) => name.includes(item.toLowerCase()));
+  return nameIndex >= 0 ? nameIndex : 1000;
+}
+
+const LIVE_STATUSES = new Set(["IN_PLAY", "PAUSED", "EXTRA_TIME", "PENALTY_SHOOTOUT", "LIVE"]);
+
+const STATUS_LABELS = {
+
+  SCHEDULED: "Scheduled", TIMED: "Scheduled", IN_PLAY: "LIVE", PAUSED: "Half-time",
+
+  EXTRA_TIME: "Extra time", PENALTY_SHOOTOUT: "Penalties", FINISHED: "FT",
+
+  POSTPONED: "Postponed", SUSPENDED: "Suspended", CANCELLED: "Cancelled",
+
+  AWARDED: "Awarded",
+
+};
+
+const TEXT = {
+
+  en: {
+
+    home: "Home", live: "Live", matches: "Matches", leagues: "Leagues", news: "News",
+
+    search: "Search", today: "Today", yesterday: "Previous day", tomorrow: "Next day",
+
+    noMatches: "No matches found for this date.", retry: "Try again", loading: "Loading…",
+
+    allLeagues: "All competitions", standings: "Standings", teams: "Teams", scorers: "Top scorers",
+
+    details: "Match details", overview: "Overview", events: "Events", lineups: "Lineups",
+
+    stats: "Statistics", close: "Back", admin: "Admin / publish update", publish: "Publish update",
+
+    title: "Title", excerpt: "Short summary", body: "Article text", category: "Category",
+
+    imageUrl: "Optional image URL", adminKey: "Admin key", delete: "Delete", noNews: "No news yet.",
+
+    noLineups: "Lineups have not been provided by the data provider for this match.",
+
+    noEvents: "No goal, booking or substitution events are available for this match.",
+
+    noStandings: "Standings are unavailable for this competition or plan.",
+
+    searchPlaceholder: "Search teams, competitions or news…", refresh: "Refresh",
+
+    publishSuccess: "Your update has been published.", published: "Published",
+
+    noSearch: "No results found.", leagueMatches: "Competition matches", matchday: "Matchday",
+
+    score: "Score", localTime: "Local time", appearance: "AG Football",
+
+  },
+
+  am: {
+
+    home: "መነሻ", live: "ቀጥታ", matches: "ጨዋታዎች", leagues: "ሊጎች", news: "ዜና",
+
+    search: "ፈልግ", today: "ዛሬ", yesterday: "ያለፈው ቀን", tomorrow: "ቀጣይ ቀን",
+
+    allLeagues: "ሁሉም ውድድሮች", standings: "ደረጃ", teams: "ቡድኖች", scorers: "ግብ አስቆጣሪዎች",
+
+    details: "የጨዋታ ዝርዝር", overview: "አጠቃላይ", events: "ክስተቶች", lineups: "ቋሚ ተሰላፊዎች",
+
+    stats: "ስታቲስቲክስ", close: "ተመለስ", admin: "አስተዳዳሪ / ዜና አትም", publish: "ዜና አትም",
+
+    title: "ርዕስ", excerpt: "አጭር ማጠቃለያ", body: "የዜና ጽሑፍ", category: "ምድብ",
+
+    imageUrl: "የምስል አድራሻ (አማራጭ)", adminKey: "የአስተዳዳሪ ቁልፍ",
+
+    delete: "ሰርዝ", noNews: "ገና ዜና የለም።", noLineups: "ለዚህ ጨዋታ ቋሚ ተሰላፊዎች አልተገኙም።",
+
+    noEvents: "ለዚህ ጨዋታ ክስተቶች አልተገኙም።", refresh: "አድስ",
+
+    searchPlaceholder: "ቡድን፣ ሊግ ወይም ዜና ፈልግ…", loading: "በመጫን ላይ…",
+
+    retry: "እንደገና ሞክር", noMatches: "በዚህ ቀን ጨዋታ አልተገኘም።",
+
+    published: "የታተመ", noStandings: "የደረጃ ሰንጠረዥ አልተገኘም።",
+
+    search: "ፈልግ", noSearch: "ውጤት አልተገኘም።", appearance: "AG Football",
+
+  },
+
+};
+
+
+
+function localDateString(date = new Date()) {
+
+  const y = date.getFullYear();
+
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+
+  const d = String(date.getDate()).padStart(2, "0");
+
+  return `${y}-${m}-${d}`;
+
+}
+
+function shiftDate(dateString, days) {
+
+  const [y, m, d] = dateString.split("-").map(Number);
+
+  const date = new Date(y, m - 1, d, 12, 0, 0);
+
+  date.setDate(date.getDate() + days);
+
+  return localDateString(date);
+
+}
+
+function getTimezone() {
+
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; }
+
+  catch { return "UTC"; }
+
+}
+
+async function api(path, options = {}) {
+
+  const response = await fetch(`${API_BASE}${path}`, {
+
+    ...options,
+
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+
+  });
+
   const data = await response.json().catch(() => ({}));
 
-  if (!response.ok || data.success === false) {
-    throw new Error(data.message || `Request failed (${response.status})`);
-  }
+  if (!response.ok || data.success === false) throw new Error(data.message || `Request failed (${response.status})`);
 
   return data;
+
 }
 
-function todayString() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Africa/Addis_Ababa",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
+function formatTime(utcDate) {
 
-  const part = (type) => parts.find((item) => item.type === type)?.value;
-  return `${part("year")}-${part("month")}-${part("day")}`;
+  if (!utcDate) return "—";
+
+  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(utcDate));
+
 }
 
-function shiftDate(date, days) {
-  const value = new Date(`${date}T12:00:00Z`);
-  value.setUTCDate(value.getUTCDate() + days);
-  return value.toISOString().slice(0, 10);
+function formatDate(dateString, locale = "en") {
+
+  const [y, m, d] = dateString.split("-").map(Number);
+
+  return new Intl.DateTimeFormat(locale === "am" ? "am-ET" : undefined, { weekday: "short", month: "short", day: "numeric" }).format(new Date(y, m - 1, d, 12));
+
 }
 
-function formatDate(date, options = {}) {
-  if (!date) return "Date unavailable";
+function statusText(match) {
+  if (match.status === "IN_PLAY") {
+    // Prefer the provider's official match minute whenever it is available.
+    if (typeof match.minute === "number") {
+      return match.injuryTime
+        ? `${match.minute}+${match.injuryTime}′`
+        : `${match.minute}′`;
+    }
 
-  return new Date(date).toLocaleString("en-GB", {
-    timeZone: "Africa/Addis_Ababa",
-    ...options,
+    // football-data.org may not return a live minute, so show an explicitly
+    // estimated elapsed time based on kickoff instead.
+    const estimatedMinute = getLiveMinute(match);
+    return estimatedMinute !== null ? `LIVE · ~${estimatedMinute}′` : "LIVE";
+  }
+
+  if (match.status === "PAUSED") return "HT";
+  if (match.status === "EXTRA_TIME" && match.minute != null) {
+    return `${match.minute}′ ET`;
+  }
+
+  return STATUS_LABELS[match.status] || match.status || "Scheduled";
+}
+
+function isLive(match) { return LIVE_STATUSES.has(match.status); }
+
+function matchGoals(match) {
+  if (Array.isArray(match?.goals) && match.goals.length) return match.goals;
+  const events = Array.isArray(match?.events) ? match.events : [];
+  return events.filter((event) => /goal|penalty_scored|own_goal/i.test(String(event.kind || event.type || event.eventType || ""))).map((event) => ({ ...event, scorer: event.scorer || event.player || event.actor, assist: event.assist || event.assistedBy, type: event.goalType || event.type }));
+}
+
+function goalMinute(goal) {
+
+  if (goal.minute == null) return "";
+
+  return `${goal.minute}${goal.injuryTime ? `+${goal.injuryTime}` : ""}′`;
+
+}
+
+function goalType(goal) {
+
+  const type = String(goal.type || "").toUpperCase();
+
+  if (type.includes("PENALTY")) return " (P)";
+
+  if (type.includes("OWN")) return " (OG)";
+
+  return "";
+
+}
+
+function matchEvents(match) {
+  const goals = (match.goals || []).map((event) => ({
+    kind: "goal",
+    minute: event.minute,
+    injuryTime: event.injuryTime,
+    icon: "⚽",
+    label: `${event.scorer?.name || "Unknown scorer"}${goalType(event)}${event.assist?.name ? ` · Assist: ${event.assist.name}` : ""}`,
+    team: event.team?.name || "",
+  }));
+  const bookings = (match.bookings || []).map((event) => ({
+    kind: "booking",
+    minute: event.minute,
+    injuryTime: event.injuryTime,
+    icon: String(event.card || "").toUpperCase().includes("RED") ? "🟥" : "🟨",
+    label: `${event.player?.name || "Unknown player"} · ${String(event.card || "Card").replaceAll("_", " ").toLowerCase()}`,
+    team: event.team?.name || "",
+  }));
+  const substitutions = (match.substitutions || []).map((event) => ({
+    kind: "substitution",
+    minute: event.minute,
+    injuryTime: event.injuryTime,
+    icon: "🔄",
+    label: `${event.playerIn?.name || "Player on"} on · ${event.playerOut?.name || "Player off"} off`,
+    team: event.team?.name || "",
+  }));
+  return [...goals, ...bookings, ...substitutions].sort((a, b) => {
+    const minuteA = Number.isFinite(Number(a.minute)) ? Number(a.minute) : 999;
+    const minuteB = Number.isFinite(Number(b.minute)) ? Number(b.minute) : 999;
+    return minuteA - minuteB || Number(a.injuryTime || 0) - Number(b.injuryTime || 0);
   });
 }
 
-function getStatus(match) {
+const STAT_LABELS = {
+  ball_possession: "Possession", shots: "Total shots", shots_on_goal: "Shots on target",
+  shots_off_goal: "Shots off target", corner_kicks: "Corners", offsides: "Offsides",
+  fouls: "Fouls", free_kicks: "Free kicks", goal_kicks: "Goal kicks", throw_ins: "Throw-ins",
+  saves: "Saves", yellow_cards: "Yellow cards", yellow_red_cards: "Second yellow / red",
+  red_cards: "Red cards",
+};
+
+function statDisplay(value, key) {
+  if (value == null) return "—";
+  return key === "ball_possession" ? `${value}%` : value;
+}
+
+function dateOfMatch(match) {
+
+  if (!match.utcDate) return "";
+
+  return localDateString(new Date(match.utcDate));
+
+}
+
+function sortCompetitions(items) {
+
+  return [...items].sort((a, b) => {
+
+    const rank = (item) => {
+      const code = String(item.code || "").toUpperCase();
+      const name = String(item.name || "").toLowerCase();
+      const codeRank = PRIORITY.indexOf(code);
+      if (codeRank >= 0) return codeRank;
+      const patterns = [
+        /champions league/, /premier league/, /la liga|primera division/,
+        /bundesliga/, /serie a/, /ligue 1/, /europa league/,
+        /conference league/, /primeira liga/, /eredivisie/, /major league soccer/
+      ];
+      const found = patterns.findIndex((pattern) => pattern.test(name));
+      return found < 0 ? 999 : found;
+    };
+    return rank(a) - rank(b) || (a.name || "").localeCompare(b.name || "");
+
+  });
+
+}
+
+
+
+function matchScore(match, side) {
+  const key = side === "home" ? "home" : "away";
+  const score = match?.score || {};
+  const direct = score?.fullTime?.[key] ?? score?.current?.[key] ?? score?.[key] ?? score?.[`${key}Score`] ?? score?.halfTime?.[key];
+  if (direct !== undefined && direct !== null && direct !== "") return direct;
+  const goals = match?.goals;
+  if (Array.isArray(goals) && (match.status === "FINISHED" || isLive(match))) {
+    const teamId = match?.[`${key}Team`]?.id;
+    const teamName = match?.[`${key}Team`]?.name;
+    const ownGoals = goals.filter(g => String(g.team?.id ?? "") === String(teamId ?? "") || (!teamId && g.team?.name === teamName)).length;
+    if (teamId != null || teamName) return ownGoals;
+  }
+  return null;
+}
+
+function MatchCard({ match, onOpen }) {
+
+  const goals = matchGoals(match);
+
+  const homeScore = matchScore(match, "home");
+
+  const awayScore = matchScore(match, "away");
+
+  const homeName = match.homeTeam?.shortName || match.homeTeam?.name || "Home";
+
+  const awayName = match.awayTeam?.shortName || match.awayTeam?.name || "Away";
+
   return (
-    match?.state?.description ||
-    match?.state?.status ||
-    match?.status ||
-    "Scheduled"
+
+    <button className="match-card" onClick={() => onOpen(match)} type="button">
+
+      <div className="match-meta">
+
+        <span className="competition-label">
+
+          {match.competition?.emblem && <img src={match.competition.emblem} alt="" onError={(e) => { e.currentTarget.style.display = "none"; }} />}
+
+          {match.competition?.name || "Competition"}
+
+        </span>
+
+        <span className={`status-pill ${isLive(match) ? "status-live" : ""}`}>
+
+          {isLive(match) && <i className="live-dot" />} {statusText(match)}
+
+        </span>
+
+      </div>
+
+      <div className="teams-score">
+
+        <div className="team-row">
+
+          <img className="team-crest" src={match.homeTeam?.crest || ""} alt="" onError={(e) => { e.currentTarget.style.visibility = "hidden"; }} />
+
+          <span className="team-name">{homeName}</span>
+
+          <strong className="team-score">{homeScore ?? "–"}</strong>
+
+        </div>
+
+        <div className="team-row">
+
+          <img className="team-crest" src={match.awayTeam?.crest || ""} alt="" onError={(e) => { e.currentTarget.style.visibility = "hidden"; }} />
+
+          <span className="team-name">{awayName}</span>
+
+          <strong className="team-score">{awayScore ?? "–"}</strong>
+
+        </div>
+
+      </div>
+
+      {goals.length > 0 && (
+
+        <div className="goal-list">
+
+          {goals.map((goal, index) => {
+
+            const homeGoal = goal.team?.id === match.homeTeam?.id;
+
+            return (
+
+              <div className="goal-line" key={`${match.id}-goal-${index}`}>
+
+                <span>⚽</span>
+
+                <span className="goal-player">{goal.scorer?.name || "Scorer unavailable"}{goalType(goal)}</span>
+
+                <span className="goal-minute">{goalMinute(goal)}</span>
+
+                <span className="goal-team">{homeGoal ? homeName : awayName}</span>
+
+              </div>
+
+            );
+
+          })}
+
+        </div>
+
+      )}
+
+      <div className="match-footer">
+
+        <span>{match.matchday ? `Matchday ${match.matchday}` : (match.stage || "")}</span>
+
+        <span>{isLive(match) ? "Match centre ↗" : formatTime(match.utcDate)}</span>
+
+      </div>
+
+    </button>
+
   );
+
 }
 
-function isLiveMatch(match) {
-  const status = getStatus(match).toLowerCase();
+
+
+function NewsCard({ item, onOpen, onDelete, canAdmin }) {
+
   return (
-    status.includes("live") ||
-    status.includes("in play") ||
-    status.includes("in progress") ||
-    status.includes("1st half") ||
-    status.includes("2nd half") ||
-    status.includes("half time") ||
-    status.includes("halftime") ||
-    status.includes("extra time") ||
-    status.includes("penalties")
+
+    <article className="news-card">
+
+      {item.imageUrl && <img className="news-image" src={item.imageUrl} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = "none"; }} />}
+
+      <div className="news-content">
+
+        <div className="news-meta"><span className="category-tag">{item.category || "News"}</span><time>{item.publishedAt ? new Date(item.publishedAt).toLocaleDateString() : ""}</time></div>
+
+        <h3>{item.title}</h3>
+
+        <p>{item.excerpt}</p>
+
+        <div className="news-actions">
+
+          <button className="text-button" onClick={() => onOpen(item)}>Read article →</button>
+
+          {canAdmin && <button className="text-button danger-text" onClick={() => onDelete(item.id)}>Delete</button>}
+
+        </div>
+
+      </div>
+
+    </article>
+
   );
+
 }
 
-function matchScore(match) {
-  const score = match?.state?.score?.current;
-  const fullTime = match?.score?.fullTime;
 
-  const home = score?.home ?? fullTime?.home;
-  const away = score?.away ?? fullTime?.away;
 
-  if (home == null && away == null) return "vs";
-  return `${home ?? 0} - ${away ?? 0}`;
-}
+export default function App() {
 
-function normalizeStandings(payload) {
-  if (Array.isArray(payload)) {
-    return payload.flatMap((item) => {
-      if (Array.isArray(item?.standings)) {
-        return item.standings.map((row) => ({
-          ...row,
-          groupName: item.name || item.groupName || "",
-        }));
-      }
-      return [item];
-    });
-  }
+  const [language, setLanguage] = useState("en");
 
-  if (Array.isArray(payload?.standings)) {
-    return normalizeStandings(payload.standings);
-  }
+  const [dark, setDark] = useState(true);
 
-  if (Array.isArray(payload?.groups)) {
-    return normalizeStandings(payload.groups);
-  }
+  const [section, setSection] = useState("home");
 
-  return [];
-}
+  const [selectedDate, setSelectedDate] = useState(() => localDateString());
 
-function App() {
-  const [view, setView] = useState("home");
-  const [date, setDate] = useState(todayString());
   const [matches, setMatches] = useState([]);
-  const [liveMatches, setLiveMatches] = useState([]);
-  const [leagues, setLeagues] = useState([]);
-  const [news, setNews] = useState([]);
-  const [selectedMatch, setSelectedMatch] = useState(null);
-  const [detailTab, setDetailTab] = useState("overview");
-  const [detailData, setDetailData] = useState({});
-  const [selectedLeague, setSelectedLeague] = useState(null);
-  const [leagueTab, setLeagueTab] = useState("matches");
-  const [leagueData, setLeagueData] = useState([]);
-  const [leagueLoading, setLeagueLoading] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [adminOpen, setAdminOpen] = useState(false);
-  const [adminKey, setAdminKey] = useState("");
-  const [newsForm, setNewsForm] = useState({
-    title: "",
-    summary: "",
-    image: "",
-    url: "",
-    category: "Football",
-  });
-  const [publishing, setPublishing] = useState(false);
-  const [newsMessage, setNewsMessage] = useState("");
 
-  const loadMatches = useCallback(async () => {
-    setLoading(true);
+  const [liveMatches, setLiveMatches] = useState([]);
+
+  const [competitions, setCompetitions] = useState([]);
+
+  const [news, setNews] = useState([]);
+
+  const [loadingMatches, setLoadingMatches] = useState(false);
+
+  const [loadingLive, setLoadingLive] = useState(false);
+
+  const [loadingLeagues, setLoadingLeagues] = useState(false);
+
+  const [loadingNews, setLoadingNews] = useState(false);
+
+  const [error, setError] = useState("");
+
+  const [selectedCompetition, setSelectedCompetition] = useState(null);
+
+  const [leagueData, setLeagueData] = useState(null);
+
+  const [selectedMatch, setSelectedMatch] = useState(null);
+
+  const [matchDetail, setMatchDetail] = useState(null);
+
+  const [matchTab, setMatchTab] = useState("overview");
+
+  const [leagueTab, setLeagueTab] = useState("matches");
+
+  const [search, setSearch] = useState("");
+
+  const [adminOpen, setAdminOpen] = useState(false);
+
+  const [adminKey, setAdminKey] = useState("");
+
+  const [adminAuthed, setAdminAuthed] = useState(false);
+
+  const [publishing, setPublishing] = useState(false);
+
+  const [notice, setNotice] = useState("");
+
+  const [article, setArticle] = useState(null);
+
+  const [newsForm, setNewsForm] = useState({ title: "", excerpt: "", body: "", category: "News", imageUrl: "" });
+
+  const t = TEXT[language];
+
+  // Re-render live minute labels every 30 seconds, even when the API data
+  // itself has not changed. The displayed elapsed minute is only an estimate
+  // when the provider does not supply an official minute.
+  const [, setClockNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const clockTimer = window.setInterval(() => setClockNow(Date.now()), 30000);
+    return () => window.clearInterval(clockTimer);
+  }, []);
+
+
+
+  const loadMatches = useCallback(async (date = selectedDate) => {
+
+    setLoadingMatches(true);
+
     setError("");
 
     try {
-      const result = await apiRequest(
-        `/api/matches?date=${encodeURIComponent(date)}`
-      );
-      setMatches(result.matches || []);
-    } catch (err) {
+
+      const data = await api(`/api/matches?date=${encodeURIComponent(date)}&timezone=${encodeURIComponent(getTimezone())}`);
+
+      const rows = Array.isArray(data.matches) ? data.matches : [];
+      setMatches(rows.sort((a, b) => competitionRank(a) - competitionRank(b) || new Date(a.utcDate || a.date || 0).getTime() - new Date(b.utcDate || b.date || 0).getTime()));
+
+    } catch (e) {
+
+      setError(e.message);
+
       setMatches([]);
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [date]);
+
+    } finally { setLoadingMatches(false); }
+
+  }, [selectedDate]);
+
+
 
   const loadLive = useCallback(async () => {
+
+    setLoadingLive(true);
+
     try {
-      const result = await apiRequest("/api/live");
-      setLiveMatches(result.matches || []);
-    } catch (err) {
-      setLiveMatches([]);
-      setError((old) => old || err.message);
-    }
+
+      const data = await api(`/api/live?timezone=${encodeURIComponent(getTimezone())}`);
+
+      setLiveMatches(data.matches || []);
+
+    } catch (e) { setError(e.message); }
+
+    finally { setLoadingLive(false); }
+
   }, []);
+
+
 
   const loadLeagues = useCallback(async () => {
+
+    setLoadingLeagues(true);
+
     try {
-      const result = await apiRequest("/api/leagues");
-      setLeagues(result.leagues || []);
-    } catch (err) {
-      setLeagues([]);
-      setError((old) => old || err.message);
-    }
+
+      const data = await api("/api/leagues");
+
+      const rows = data.competitions || data.leagues || data.data?.competitions || data.data?.leagues || data.data?.data?.leagues || [];
+      setCompetitions(sortCompetitions(Array.isArray(rows) ? rows : []));
+      if (!Array.isArray(rows) || rows.length === 0) {
+        setError("The football provider returned no competitions. Check /api/test and your Highlightly plan.");
+      }
+
+    } catch (e) { setError(e.message); }
+
+    finally { setLoadingLeagues(false); }
+
   }, []);
+
+
 
   const loadNews = useCallback(async () => {
+
+    setLoadingNews(true);
+
     try {
-      const result = await apiRequest("/api/news");
-      setNews(result.news || []);
-    } catch (err) {
-      setNews([]);
-      setError((old) => old || err.message);
-    }
+
+      const data = await api("/api/news");
+
+      setNews(data.news || []);
+
+    } catch (e) { setError(e.message); }
+
+    finally { setLoadingNews(false); }
+
   }, []);
 
-  useEffect(() => {
-    loadMatches();
-  }, [loadMatches]);
+
+
+  useEffect(() => { loadMatches(); }, [loadMatches]);
+
+  useEffect(() => { loadLeagues(); loadNews(); loadLive(); }, [loadLeagues, loadNews, loadLive]);
 
   useEffect(() => {
-    loadLive();
-    loadLeagues();
-    loadNews();
-  }, [loadLive, loadLeagues, loadNews]);
 
-  const groupedMatches = useMemo(() => {
-    const groups = new Map();
+    const timer = window.setInterval(() => { loadLive(); }, 120000);
 
-    for (const match of matches) {
-      const name = match?.league?.name || match?.competition?.name || "Other matches";
-      if (!groups.has(name)) groups.set(name, []);
-      groups.get(name).push(match);
-    }
+    return () => window.clearInterval(timer);
 
-    return [...groups.entries()];
-  }, [matches]);
+  }, [loadLive]);
+
+
+
+  const goDate = (days) => {
+
+    const next = shiftDate(selectedDate, days);
+
+    setSelectedDate(next);
+
+    loadMatches(next);
+
+  };
+
+
 
   async function openMatch(match) {
     setSelectedMatch(match);
-    setDetailTab("overview");
-    setDetailData({});
-    setView("match");
-    setError("");
-
+    setMatchDetail(match);
+    setMatchTab("overview");
+    setMatchDetailError("");
+    setMatchDetailLoading(true);
+    setSection("match-detail");
     try {
-      const result = await apiRequest(`/api/matches/${match.id}`);
-      setSelectedMatch(result.match || match);
-    } catch {
-      // Keep the match card's existing details if the provider has no full record.
+      const data = await api(`/api/matches/${match.id}`);
+      setMatchDetail(data.match || match);
+      setMatchDetailUpdatedAt(new Date());
+    } catch (error) {
+      setMatchDetailError(error.message || "Could not load the latest match details.");
+      // Keep the fixture-card data visible if the details request fails.
+    } finally {
+      setMatchDetailLoading(false);
     }
   }
 
+  async function refreshMatchDetails() {
+    if (!selectedMatch?.id) return;
+    setMatchDetailLoading(true);
+    setMatchDetailError("");
+    try {
+      const data = await api(`/api/matches/${selectedMatch.id}`);
+      setMatchDetail(data.match || matchDetail || selectedMatch);
+      setMatchDetailUpdatedAt(new Date());
+    } catch (error) {
+      setMatchDetailError(error.message || "Could not refresh match details.");
+    } finally {
+      setMatchDetailLoading(false);
+    }
+  }
+
+  // Keep the currently open live match centre up to date. Finished matches
+  // are not polled, which helps avoid unnecessary API calls and rate limits.
   useEffect(() => {
-    if (!selectedMatch || view !== "match" || detailTab === "overview") return;
-
-    let cancelled = false;
-
-    async function loadDetail() {
-      setLoading(true);
-      setError("");
-
+    if (section !== "match-detail" || !selectedMatch?.id || !isLive(matchDetail || selectedMatch)) return;
+    const timer = window.setInterval(async () => {
       try {
-        const result = await apiRequest(
-          `/api/matches/${selectedMatch.id}/${detailTab}`
-        );
-
-        if (!cancelled) setDetailData((old) => ({ ...old, [detailTab]: result }));
-      } catch (err) {
-        if (!cancelled) {
-          setDetailData((old) => ({ ...old, [detailTab]: null }));
-          setError(err.message);
+        const data = await api(`/api/matches/${selectedMatch.id}`);
+        const updated = data.match || null;
+        if (updated) {
+          setMatchDetail(updated);
+          setMatchDetailUpdatedAt(new Date());
+          setMatchDetailError("");
         }
-      } finally {
-        if (!cancelled) setLoading(false);
+      } catch (error) {
+        setMatchDetailError(error.message || "Live match refresh failed. You can retry manually.");
       }
-    }
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [section, selectedMatch?.id, matchDetail?.status]);
 
-    loadDetail();
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedMatch, view, detailTab]);
+  async function openCompetition(competition) {
 
-  async function openLeague(league) {
-    setSelectedLeague(league);
+    setSelectedCompetition(competition);
+
+    setLeagueData(null);
+
     setLeagueTab("matches");
-    setLeagueData([]);
-    setView("league");
-    setError("");
 
-    if (!league.currentSeasonAvailable || league.currentSeason == null) {
-      setError(
-        `No current season is listed for ${league.name}. Old seasons will not be shown as current.`
-      );
-      return;
-    }
-
-    await loadLeagueSection(league, "matches");
-  }
-
-  async function loadLeagueSection(league, tab) {
-    if (!league?.id) return;
-
-    if (!league.currentSeasonAvailable || league.currentSeason == null) {
-      setLeagueData([]);
-      setError(`Current season data is unavailable for ${league.name}.`);
-      return;
-    }
-
-    setLeagueLoading(true);
-    setError("");
+    setSection("league-detail");
 
     try {
-      const result = await apiRequest(
-        `/api/leagues/${league.id}/${tab}?season=${league.currentSeason}`
-      );
 
-      if (tab === "standings") {
-        setLeagueData(normalizeStandings(result.standings));
-      } else {
-        setLeagueData(
-          result.matches || result.teams || result.scorers || []
-        );
-      }
-    } catch (err) {
-      setLeagueData([]);
-      setError(err.message);
-    } finally {
-      setLeagueLoading(false);
-    }
+      const [matchResponse, standingsResponse, teamsResponse, scorersResponse] = await Promise.allSettled([
+
+        api(`/api/leagues/${encodeURIComponent(competition.code)}/matches`),
+
+        api(`/api/leagues/${encodeURIComponent(competition.code)}/standings`),
+
+        api(`/api/leagues/${encodeURIComponent(competition.code)}/teams`),
+
+        api(`/api/leagues/${encodeURIComponent(competition.code)}/scorers`),
+
+      ]);
+
+      setLeagueData({
+
+        matches: matchResponse.status === "fulfilled" ? matchResponse.value.matches || [] : [],
+
+        standings: standingsResponse.status === "fulfilled" ? standingsResponse.value.standings || [] : [],
+
+        teams: teamsResponse.status === "fulfilled" ? teamsResponse.value.teams || [] : [],
+
+        scorers: scorersResponse.status === "fulfilled" ? scorersResponse.value.scorers || [] : [],
+
+        errors: [matchResponse, standingsResponse, teamsResponse, scorersResponse].map((r) => r.status === "rejected" ? r.reason?.message : ""),
+
+      });
+
+    } catch (e) { setError(e.message); }
+
   }
 
-  async function chooseLeagueTab(tab) {
-    setLeagueTab(tab);
-    if (selectedLeague) await loadLeagueSection(selectedLeague, tab);
-  }
+  async function deleteNews(id) {
 
-  async function publishNews(event) {
-    event.preventDefault();
-    setPublishing(true);
-    setNewsMessage("");
+    if (!window.confirm("Delete this news post?")) return;
 
     try {
-      const result = await apiRequest("/api/news", {
+
+      await api(`/api/news/${encodeURIComponent(id)}`, { method: "DELETE", headers: { "x-admin-key": adminKey } });
+
+      setNews((old) => old.filter((item) => item.id !== id));
+
+      setNotice("News post deleted.");
+
+    } catch (e) { setNotice(e.message); }
+
+  }
+
+  async function publishNews(e) {
+
+    e.preventDefault();
+
+    setPublishing(true); setNotice("");
+
+    try {
+
+      const data = await api("/api/news", {
+
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-admin-key": adminKey,
-        },
-        body: JSON.stringify({
-          ...newsForm,
-          description: newsForm.summary,
-          source: "AG SOCCER",
-          publishedAt: new Date().toISOString(),
-        }),
+
+        headers: { "x-admin-key": adminKey },
+
+        body: JSON.stringify(newsForm),
+
       });
 
-      if (result.article) {
-        setNews((old) => [result.article, ...old]);
-      } else {
-        await loadNews();
-      }
+      setNews((old) => [data.news || data.article, ...old].filter(Boolean));
 
-      setNewsForm({
-        title: "",
-        summary: "",
-        image: "",
-        url: "",
-        category: "Football",
-      });
-      setNewsMessage("Article published successfully.");
-    } catch (err) {
-      setNewsMessage(err.message);
-    } finally {
-      setPublishing(false);
-    }
+      setNewsForm({ title: "", excerpt: "", body: "", category: "News", imageUrl: "" });
+
+      setAdminOpen(false);
+
+      setAdminAuthed(true);
+
+      setNotice(t.publishSuccess);
+
+    } catch (e2) { setNotice(e2.message); }
+
+    finally { setPublishing(false); }
+
   }
 
-  function goBack() {
-    if (view === "match") {
-      setView("home");
-    } else if (view === "league") {
-      setView("leagues");
-    } else {
-      setView("home");
-    }
+
+
+  const filteredMatches = useMemo(() => {
+
+    const q = search.trim().toLowerCase();
+
+    return matches
+      .filter((m) => !q || [m.homeTeam?.name, m.awayTeam?.name, m.competition?.name].some((v) => v?.toLowerCase().includes(q)))
+      .sort((a, b) => competitionRank(a) - competitionRank(b) || new Date(a.utcDate || 0).getTime() - new Date(b.utcDate || 0).getTime());
+
+  }, [matches, search]);
+
+  const filteredCompetitions = useMemo(() => {
+
+    const q = search.trim().toLowerCase();
+
+    return competitions.filter((c) => !q || `${c.name} ${c.code} ${c.area?.name || c.country?.name || c.country || ""}`.toLowerCase().includes(q));
+
+  }, [competitions, search]);
+
+  const filteredNews = useMemo(() => {
+
+    const q = search.trim().toLowerCase();
+
+    return news.filter((n) => !q || `${n.title} ${n.excerpt} ${n.body} ${n.category}`.toLowerCase().includes(q));
+
+  }, [news, search]);
+
+
+
+  const liveView = section === "live";
+
+  const detailView = section === "match-detail" || section === "league-detail" || section === "article";
+
+  function navigate(next) {
+
+    setSection(next);
+
+    setSelectedMatch(null);
+
+    setMatchDetail(null);
+
+    setSelectedCompetition(null);
+
+    setArticle(null);
+
     setError("");
+
+    if (next === "live") loadLive();
+
+    if (next === "leagues") loadLeagues();
+
+    if (next === "news") loadNews();
+
+    if (next === "home" || next === "matches") loadMatches(selectedDate);
+
   }
 
-  function renderMatchCard(match) {
-    const live = isLiveMatch(match);
-    const home = match.homeTeam || {};
-    const away = match.awayTeam || {};
-    const leagueName = match.league?.name || match.competition?.name;
 
-    return (
-      <button
-        type="button"
-        className="match-card"
-        key={match.id}
-        onClick={() => openMatch(match)}
-      >
-        <div className="match-card-top">
-          <span>{formatDate(match.date, { hour: "2-digit", minute: "2-digit" })}</span>
-          <span className={live ? "status live-status" : "status"}>
-            {getStatus(match)}
-          </span>
-        </div>
-
-        <div className="match-teams">
-          <div className="team-side">
-            <img src={home.logo || "/club-placeholder.svg"} alt="" />
-            <span>{home.name || "Home team"}</span>
-          </div>
-
-          <strong className="match-score">{matchScore(match)}</strong>
-
-          <div className="team-side away-side">
-            <img src={away.logo || "/club-placeholder.svg"} alt="" />
-            <span>{away.name || "Away team"}</span>
-          </div>
-        </div>
-
-        <div className="match-card-bottom">
-          <span>{leagueName || "Football"}</span>
-          <span>Details ↗</span>
-        </div>
-      </button>
-    );
-  }
-
-  function renderHome() {
-    return (
-      <>
-        <section className="hero">
-          <div>
-            <p className="eyebrow">YOUR FOOTBALL HUB</p>
-            <h1>Every match.<br /><span>Every moment.</span></h1>
-            <p className="hero-copy">
-              Fixtures, scores, standings, and football news in one place.
-            </p>
-          </div>
-          <div className="hero-ball" aria-hidden="true">⚽</div>
-        </section>
-
-        <section className="section-block">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">FIXTURES</p>
-              <h2>Match schedule</h2>
-            </div>
-            <button className="text-button" onClick={() => setView("live")}>
-              Live matches →
-            </button>
-          </div>
-
-          <div className="date-navigation">
-            <button aria-label="Previous day" onClick={() => setDate(shiftDate(date, -1))}>
-              ‹
-            </button>
-            <div>
-              <strong>
-                {date === todayString()
-                  ? "Today"
-                  : formatDate(`${date}T12:00:00`, {
-                      weekday: "short",
-                      day: "numeric",
-                      month: "short",
-                    })}
-              </strong>
-              <span>{date}</span>
-            </div>
-            <button aria-label="Next day" onClick={() => setDate(shiftDate(date, 1))}>
-              ›
-            </button>
-            <button className="today-button" onClick={() => setDate(todayString())}>
-              Today
-            </button>
-          </div>
-
-          {loading && <p className="info-message">Loading matches…</p>}
-
-          {!loading && matches.length === 0 && (
-            <div className="empty-state">
-              <span>⚽</span>
-              <h3>No matches found</h3>
-              <p>There may be no scheduled matches on this date, or the provider may not include them in your plan.</p>
-            </div>
-          )}
-
-          <div className="match-groups">
-            {groupedMatches.map(([leagueName, leagueMatches]) => (
-              <section className="match-group" key={leagueName}>
-                <h3>{leagueName}</h3>
-                {leagueMatches.map(renderMatchCard)}
-              </section>
-            ))}
-          </div>
-        </section>
-      </>
-    );
-  }
-
-  function renderLive() {
-    return (
-      <section className="section-block">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">LIVE CENTER</p>
-            <h2><span className="live-dot" /> Live matches</h2>
-          </div>
-          <button className="text-button" onClick={loadLive}>Refresh ↻</button>
-        </div>
-
-        {liveMatches.length === 0 ? (
-          <div className="empty-state">
-            <span>🔴</span>
-            <h3>No live matches right now</h3>
-            <p>Live matches appear here when the provider reports an in-progress status.</p>
-          </div>
-        ) : (
-          <div className="match-groups">
-            {liveMatches.map(renderMatchCard)}
-          </div>
-        )}
-      </section>
-    );
-  }
-
-  function renderLeagues() {
-    return (
-      <section className="section-block">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">COMPETITIONS</p>
-            <h2>Explore leagues</h2>
-          </div>
-          <button className="text-button" onClick={loadLeagues}>Refresh ↻</button>
-        </div>
-
-        <div className="league-grid">
-          {leagues.map((league) => (
-            <button
-              type="button"
-              className="league-card"
-              key={league.id}
-              onClick={() => openLeague(league)}
-            >
-              <img src={league.logo || "/club-placeholder.svg"} alt="" />
-              <span className="league-card-name">{league.name}</span>
-              <span className="league-country">{league.country?.name || "International"}</span>
-              <span className="season-chip">
-                {league.currentSeasonAvailable
-                  ? `Season ${league.currentSeason}`
-                  : "Current season unavailable"}
-              </span>
-            </button>
-          ))}
-        </div>
-
-        {leagues.length === 0 && (
-          <div className="empty-state">
-            <h3>No competitions loaded</h3>
-            <p>Check the backend and Highlightly API configuration.</p>
-          </div>
-        )}
-      </section>
-    );
-  }
-
-  function renderNews() {
-    return (
-      <section className="section-block">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">LATEST UPDATES</p>
-            <h2>Football news</h2>
-          </div>
-          <button
-            className="admin-toggle"
-            onClick={() => {
-              setAdminOpen((old) => !old);
-              setNewsMessage("");
-            }}
-          >
-            {adminOpen ? "Close admin" : "＋ Admin News"}
-          </button>
-        </div>
-
-        {adminOpen && (
-          <form className="admin-form" onSubmit={publishNews}>
-            <div>
-              <p className="eyebrow">ADMIN AREA</p>
-              <h3>Publish an article</h3>
-              <p className="muted">
-                Only users with your server's ADMIN_KEY can publish news.
-              </p>
-            </div>
-
-            <label>
-              Admin secret
-              <input
-                type="password"
-                autoComplete="current-password"
-                value={adminKey}
-                onChange={(e) => setAdminKey(e.target.value)}
-                required
-                placeholder="Enter your private admin key"
-              />
-            </label>
-
-            <label>
-              Headline
-              <input
-                value={newsForm.title}
-                onChange={(e) => setNewsForm({ ...newsForm, title: e.target.value })}
-                required
-                maxLength={180}
-                placeholder="Enter a news headline"
-              />
-            </label>
-
-            <label>
-              Summary
-              <textarea
-                value={newsForm.summary}
-                onChange={(e) => setNewsForm({ ...newsForm, summary: e.target.value })}
-                required
-                maxLength={3000}
-                placeholder="Write your article summary"
-              />
-            </label>
-
-            <label>
-              Image URL (optional)
-              <input
-                type="url"
-                value={newsForm.image}
-                onChange={(e) => setNewsForm({ ...newsForm, image: e.target.value })}
-                placeholder="https://example.com/image.jpg"
-              />
-            </label>
-
-            <label>
-              Article URL (optional)
-              <input
-                type="url"
-                value={newsForm.url}
-                onChange={(e) => setNewsForm({ ...newsForm, url: e.target.value })}
-                placeholder="https://example.com/article"
-              />
-            </label>
-
-            <label>
-              Category
-              <select
-                value={newsForm.category}
-                onChange={(e) => setNewsForm({ ...newsForm, category: e.target.value })}
-              >
-                <option>Football</option>
-                <option>Premier League</option>
-                <option>Champions League</option>
-                <option>La Liga</option>
-                <option>Transfers</option>
-                <option>International</option>
-              </select>
-            </label>
-
-            <button className="primary-button" type="submit" disabled={publishing}>
-              {publishing ? "Publishing…" : "Publish News"}
-            </button>
-            {newsMessage && <p className="form-message" role="status">{newsMessage}</p>}
-          </form>
-        )}
-
-        <div className="news-grid">
-          {news.map((article) => (
-            <article className="news-card" key={article.id}>
-              {article.image && (
-                <img className="news-image" src={article.image} alt="" />
-              )}
-              <div className="news-content">
-                <span className="news-category">{article.category || "Football"}</span>
-                <h3>{article.title}</h3>
-                <p>{article.summary || article.description}</p>
-                <div className="news-footer">
-                  <span>{article.source || "AG SOCCER"}</span>
-                  <span>{formatDate(article.publishedAt, {
-                    day: "numeric",
-                    month: "short",
-                    year: "numeric",
-                  })}</span>
-                </div>
-                {article.url && (
-                  <a href={article.url} target="_blank" rel="noreferrer">
-                    Read article ↗
-                  </a>
-                )}
-                {adminOpen && (
-                  <button
-                    type="button"
-                    className="delete-news"
-                    onClick={async () => {
-                      if (!window.confirm("Delete this article?")) return;
-                      try {
-                        await apiRequest(`/api/news/${article.id}`, {
-                          method: "DELETE",
-                          headers: { "x-admin-key": adminKey },
-                        });
-                        setNews((old) => old.filter((item) => item.id !== article.id));
-                        setNewsMessage("Article deleted.");
-                      } catch (err) {
-                        setNewsMessage(err.message);
-                      }
-                    }}
-                  >
-                    Delete article
-                  </button>
-                )}
-              </div>
-            </article>
-          ))}
-        </div>
-
-        {news.length === 0 && (
-          <div className="empty-state">
-            <span>📰</span>
-            <h3>No articles published yet</h3>
-            <p>Use Admin News to add your first article.</p>
-          </div>
-        )}
-      </section>
-    );
-  }
-
-  function renderMatchDetails() {
-    const match = selectedMatch;
-    if (!match) return null;
-
-    const home = match.homeTeam || {};
-    const away = match.awayTeam || {};
-    const data = detailData[detailTab];
-
-    return (
-      <section className="section-block">
-        <button className="back-button" onClick={goBack}>← Back</button>
-
-        <div className="match-hero">
-          <p className="eyebrow">{match.league?.name || match.competition?.name}</p>
-          <p className="muted">{formatDate(match.date, {
-            weekday: "long",
-            day: "numeric",
-            month: "long",
-            year: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-          })}</p>
-
-          <div className="match-hero-teams">
-            <div>
-              <img src={home.logo || "/club-placeholder.svg"} alt="" />
-              <h3>{home.name}</h3>
-            </div>
-            <strong>{matchScore(match)}</strong>
-            <div>
-              <img src={away.logo || "/club-placeholder.svg"} alt="" />
-              <h3>{away.name}</h3>
-            </div>
-          </div>
-          <span className={isLiveMatch(match) ? "status live-status" : "status"}>
-            {getStatus(match)}
-          </span>
-        </div>
-
-        <div className="detail-tabs">
-          {["overview", "events", "lineups", "statistics"].map((tab) => (
-            <button
-              key={tab}
-              className={detailTab === tab ? "active" : ""}
-              onClick={() => setDetailTab(tab)}
-            >
-              {tab[0].toUpperCase() + tab.slice(1)}
-            </button>
-          ))}
-        </div>
-
-        {detailTab === "overview" ? (
-          <div className="detail-panel">
-            <h3>Match information</h3>
-            <p><strong>Competition:</strong> {match.league?.name || match.competition?.name || "Unknown"}</p>
-            <p><strong>Kickoff:</strong> {formatDate(match.date, {
-              hour: "2-digit",
-              minute: "2-digit",
-              timeZoneName: "short",
-            })}</p>
-            <p><strong>Status:</strong> {getStatus(match)}</p>
-            <p><strong>Score:</strong> {matchScore(match)}</p>
-          </div>
-        ) : loading ? (
-          <p className="info-message">Loading {detailTab}…</p>
-        ) : data == null ? (
-          <div className="empty-state">
-            <h3>{detailTab[0].toUpperCase() + detailTab.slice(1)} unavailable</h3>
-            <p>The provider may not supply this information for this match or your plan.</p>
-          </div>
-        ) : (
-          <pre className="data-panel">{JSON.stringify(
-            data[detailTab] ?? data.events ?? data.lineups ?? data.statistics ?? data,
-            null,
-            2
-          )}</pre>
-        )}
-      </section>
-    );
-  }
-
-  function renderLeagueDetails() {
-    if (!selectedLeague) return null;
-
-    return (
-      <section className="section-block">
-        <button className="back-button" onClick={goBack}>← All leagues</button>
-
-        <div className="league-detail-heading">
-          <img src={selectedLeague.logo || "/club-placeholder.svg"} alt="" />
-          <div>
-            <p className="eyebrow">{selectedLeague.country?.name || "Competition"}</p>
-            <h2>{selectedLeague.name}</h2>
-            <p className="muted">
-              {selectedLeague.currentSeasonAvailable
-                ? `Season ${selectedLeague.currentSeason}`
-                : "Current season unavailable"}
-            </p>
-          </div>
-        </div>
-
-        <div className="detail-tabs">
-          {["matches", "standings", "teams", "scorers"].map((tab) => (
-            <button
-              key={tab}
-              className={leagueTab === tab ? "active" : ""}
-              onClick={() => chooseLeagueTab(tab)}
-            >
-              {tab[0].toUpperCase() + tab.slice(1)}
-            </button>
-          ))}
-        </div>
-
-        {leagueLoading && <p className="info-message">Loading {leagueTab}…</p>}
-
-        {!leagueLoading && leagueTab === "matches" && (
-          leagueData.length
-            ? leagueData.map(renderMatchCard)
-            : <p className="empty-inline">No fixtures available for this season.</p>
-        )}
-
-        {!leagueLoading && leagueTab === "standings" && (
-          leagueData.length ? (
-            <div className="table-scroll">
-              <table className="standings-table">
-                <thead>
-                  <tr>
-                    <th>#</th><th>Team</th><th>MP</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>Pts</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {leagueData.map((row, index) => {
-                    const stats = row.total || row;
-                    return (
-                      <tr key={row.team?.id || index}>
-                        <td>{row.position || index + 1}</td>
-                        <td className="standing-team">
-                          {row.team?.logo && <img src={row.team.logo} alt="" />}
-                          {row.team?.name || row.name || "Team"}
-                        </td>
-                        <td>{stats.games ?? stats.played ?? 0}</td>
-                        <td>{stats.wins ?? 0}</td>
-                        <td>{stats.draws ?? 0}</td>
-                        <td>{stats.loses ?? stats.losses ?? 0}</td>
-                        <td>{stats.scoredGoals ?? stats.goalsFor ?? 0}</td>
-                        <td>{stats.receivedGoals ?? stats.goalsAgainst ?? 0}</td>
-                        <td><strong>{row.points ?? stats.points ?? 0}</strong></td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : <p className="empty-inline">No standings available for this season.</p>
-        )}
-
-        {!leagueLoading && leagueTab === "teams" && (
-          <div className="team-grid">
-            {leagueData.map((team) => {
-              const item = team.team || team;
-              return (
-                <div className="team-card" key={item.id || item.name}>
-                  <img src={item.logo || "/club-placeholder.svg"} alt="" />
-                  <span>{item.name}</span>
-                </div>
-              );
-            })}
-            {!leagueData.length && <p className="empty-inline">No teams available.</p>}
-          </div>
-        )}
-
-        {!leagueLoading && leagueTab === "scorers" && (
-          leagueData.length ? (
-            <div className="scorer-list">
-              {leagueData.map((player, index) => (
-                <div className="scorer-row" key={player.id || index}>
-                  <strong>{index + 1}</strong>
-                  <span>{player.name || player.player?.name || "Player"}</span>
-                  <strong>{player.goals ?? player.statistics?.goals ?? "—"}</strong>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="empty-inline">
-              Top scorers are not connected yet for this API integration.
-            </p>
-          )
-        )}
-      </section>
-    );
-  }
 
   return (
-    <div className="app-shell">
-      <header className="app-header">
-        <button className="brand" onClick={() => setView("home")} aria-label="AG SOCCER home">
-          <span className="brand-icon">AG</span>
-          <span>AG <strong>SOCCER</strong></span>
+
+    <div className={`app-shell ${dark ? "theme-dark" : "theme-light"}`}>
+
+      <header className="topbar">
+
+        <button className="brand" onClick={() => navigate("home")} aria-label="AG Football home">
+
+          <span className="brand-ball">⚽</span><span><strong>AG Football</strong><small>LIVE SCORES · NEWS</small></span>
+
         </button>
-        <span className="header-tag">FOOTBALL CENTRAL</span>
+
+        <div className="top-actions">
+
+          <button className="icon-button" onClick={() => setDark((v) => !v)} title="Toggle theme">{dark ? "☀️" : "🌙"}</button>
+
+          <button className="language-button" onClick={() => setLanguage((v) => v === "en" ? "am" : "en")}>{language === "en" ? "አማ" : "EN"}</button>
+
+        </div>
+
       </header>
 
-      <main className="main-content">
-        {error && (
-          <div className="error-banner">
-            <span>{error}</span>
-            <button onClick={() => setError("")} aria-label="Dismiss error">×</button>
+
+
+      <main className="main-wrap">
+
+        <div className="welcome-row">
+
+          <div><p className="eyebrow">YOUR FOOTBALL, YOUR WAY</p><h1>{section === "live" ? "Live centre" : section === "leagues" ? "Competitions" : section === "news" ? "Club news & updates" : "Football at a glance"}</h1><p className="subheading">Scores, schedules, league tables and updates in one place.</p></div>
+
+          <button className="refresh-button" onClick={() => { loadMatches(); loadLive(); loadLeagues(); loadNews(); }}>↻ {t.refresh}</button>
+
+        </div>
+
+
+
+        {notice && <div className="notice-bar" role="status">{notice}<button onClick={() => setNotice("")}>×</button></div>}
+
+        {error && <div className="error-bar" role="alert">{error}<button onClick={() => setError("")}>×</button></div>}
+
+
+
+        {!detailView && (
+
+          <div className="section-nav" role="navigation" aria-label="Main sections">
+
+            {[
+
+              ["home", `⌂ ${t.home}`], ["live", `● ${t.live}`], ["matches", `▦ ${t.matches}`],
+
+              ["leagues", `♜ ${t.leagues}`], ["news", `▤ ${t.news}`],
+
+            ].map(([key, label]) => <button key={key} className={section === key ? "nav-item active" : "nav-item"} onClick={() => navigate(key)}>{label}</button>)}
+
           </div>
+
         )}
 
-        {view === "home" && renderHome()}
-        {view === "live" && renderLive()}
-        {view === "leagues" && renderLeagues()}
-        {view === "news" && renderNews()}
-        {view === "match" && renderMatchDetails()}
-        {view === "league" && renderLeagueDetails()}
+
+
+        {!detailView && (
+
+          <div className="search-row">
+
+            <span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t.searchPlaceholder} aria-label={t.search} />
+
+            {search && <button onClick={() => setSearch("")}>×</button>}
+
+          </div>
+
+        )}
+
+
+
+        {(section === "home" || section === "matches") && (
+
+          <section className="panel">
+
+            <div className="section-heading"><div><p className="eyebrow">{section === "home" ? "FIXTURES & RESULTS" : "MATCH CENTRE"}</p><h2>{t.matches}</h2></div><input className="date-input" type="date" value={selectedDate} onChange={(e) => { if (e.target.value) { setSelectedDate(e.target.value); loadMatches(e.target.value); } }} /></div>
+
+            <div
+              className="date-strip"
+              role="navigation"
+              aria-label="Choose match date"
+              style={{
+                display: "flex",
+                gap: "8px",
+                overflowX: "auto",
+                overflowY: "hidden",
+                padding: "8px 2px 12px",
+                margin: "8px 0 12px",
+                WebkitOverflowScrolling: "touch",
+                scrollbarWidth: "thin",
+                scrollSnapType: "x proximity",
+              }}
+            >
+              {Array.from({ length: 29 }, (_, index) => shiftDate(localDateString(), index - 7)).map((date) => {
+                const today = localDateString();
+                const isSelected = selectedDate === date;
+                const isToday = date === today;
+                const dateObj = new Date(`${date}T12:00:00`);
+                const weekday = new Intl.DateTimeFormat(language === "am" ? "am-ET" : undefined, { weekday: "short" }).format(dateObj);
+                const dayNumber = dateObj.getDate();
+                const month = new Intl.DateTimeFormat(language === "am" ? "am-ET" : undefined, { month: "short" }).format(dateObj);
+                return (
+                  <button
+                    key={date}
+                    type="button"
+                    aria-pressed={isSelected}
+                    aria-label={`${isToday ? t.today : weekday} ${month} ${dayNumber}, ${date}`}
+                    className={`date-chip${isSelected ? " selected" : ""}${isToday ? " today" : ""}`}
+                    onClick={() => { setSelectedDate(date); loadMatches(date); }}
+                    style={{
+                      flex: "0 0 76px",
+                      minWidth: "76px",
+                      minHeight: "70px",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "4px",
+                      padding: "8px 6px",
+                      borderRadius: "12px",
+                      border: isSelected ? "1px solid var(--primary, #6366f1)" : "1px solid var(--border, #334155)",
+                      background: isSelected ? "var(--primary, #6366f1)" : "var(--card, #111827)",
+                      color: isSelected ? "#ffffff" : "var(--text, #f8fafc)",
+                      cursor: "pointer",
+                      scrollSnapAlign: "center",
+                    }}
+                  >
+                    <span style={{ fontSize: "12px", opacity: 0.85 }}>{isToday ? t.today : weekday}</span>
+                    <strong style={{ fontSize: "20px", lineHeight: 1.1 }}>{dayNumber}</strong>
+                    <span style={{ fontSize: "11px", opacity: 0.85 }}>{month}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <p className="date-caption">{formatDate(selectedDate, language)} · {selectedDate}</p>
+
+            {loadingMatches ? <div className="loading-state">{t.loading}</div> :
+
+              filteredMatches.length ? <div className="match-grid">{filteredMatches.map((match) => <MatchCard key={match.id} match={match} onOpen={openMatch} />)}</div> :
+
+              <div className="empty-state"><span>⚽</span><h3>{t.noMatches}</h3><p>Try another date or open a competition to view its full schedule.</p><button className="secondary-button" onClick={() => loadMatches()}>{t.retry}</button></div>}
+
+          </section>
+
+        )}
+
+
+
+        {section === "live" && (
+
+          <section className="panel">
+
+            <div className="section-heading"><div><p className="eyebrow">LIVE SCOREBOARD</p><h2><i className="live-dot" /> {t.live} games</h2></div><span className="muted">{loadingLive ? t.loading : `${liveMatches.length} matches`}</span></div>
+
+            {loadingLive && !liveMatches.length ? <div className="loading-state">{t.loading}</div> :
+
+              liveMatches.filter((m) => !search || `${m.homeTeam?.name} ${m.awayTeam?.name} ${m.competition?.name}`.toLowerCase().includes(search.toLowerCase())).length ?
+
+                <div className="match-grid">{liveMatches.filter((m) => !search || `${m.homeTeam?.name} ${m.awayTeam?.name} ${m.competition?.name}`.toLowerCase().includes(search.toLowerCase())).map((match) => <MatchCard key={match.id} match={match} onOpen={openMatch} />)}</div> :
+
+                <div className="empty-state"><span>◷</span><h3>No live games found right now</h3><p>The scoreboard refreshes automatically every two minutes. Availability depends on your data provider plan.</p><button className="secondary-button" onClick={loadLive}>{t.refresh}</button></div>}
+
+          </section>
+
+        )}
+
+
+
+        {section === "leagues" && (
+
+          <section className="panel">
+
+            <div className="section-heading"><div><p className="eyebrow">FOLLOW THE COMPETITIONS</p><h2>{t.leagues}</h2></div><span className="muted">{competitions.length} available</span></div>
+
+            {loadingLeagues && !competitions.length ? <div className="loading-state">{t.loading}</div> :
+
+              filteredCompetitions.length ? <div className="competition-grid">{filteredCompetitions.map((competition) => <button className="competition-card" key={competition.id} onClick={() => openCompetition(competition)}>
+
+                <span className="competition-logo">{competition.emblem ? <img src={competition.emblem} alt="" onError={(e) => { e.currentTarget.style.display = "none"; }} /> : "🏆"}</span>
+
+                <span className="competition-info"><strong>{competition.name}</strong><small>{competition.area?.name || "International"} · {competition.code}</small></span><span className="arrow">↗</span>
+
+              </button>)}</div> :
+
+              <div className="empty-state"><h3>No competitions available</h3><p>Check your API token and football-data.org plan.</p><button className="secondary-button" onClick={loadLeagues}>{t.retry}</button></div>}
+
+          </section>
+
+        )}
+
+
+
+        {section === "news" && (
+
+          <section className="panel">
+
+            <div className="section-heading"><div><p className="eyebrow">FROM THE AG FOOTBALL TEAM</p><h2>News & client updates</h2><p className="subheading">Publish app announcements, release notes, football articles and service updates.</p></div><button className="primary-button" onClick={() => setAdminOpen((v) => !v)}>{adminOpen ? "Close publisher" : `＋ ${t.admin}`}</button></div>
+
+            {adminOpen && (
+
+              <div className="admin-panel">
+
+                <h3>Publish a news post</h3>
+
+                {!adminAuthed && <p className="muted">Enter your private ADMIN_KEY from server/.env. The key is sent only to your backend for publishing.</p>}
+
+                <form className="news-form" onSubmit={publishNews}>
+
+                  <label>{t.adminKey}<input type="password" autoComplete="current-password" value={adminKey} onChange={(e) => { setAdminKey(e.target.value); setAdminAuthed(false); }} required /></label>
+
+                  <label>{t.title}<input maxLength={160} value={newsForm.title} onChange={(e) => setNewsForm({ ...newsForm, title: e.target.value })} required /></label>
+
+                  <label>{t.category}<select value={newsForm.category} onChange={(e) => setNewsForm({ ...newsForm, category: e.target.value })}><option>News</option><option>App update</option><option>Announcement</option><option>Football</option><option>Maintenance</option></select></label>
+
+                  <label>{t.excerpt}<textarea rows="2" maxLength={400} value={newsForm.excerpt} onChange={(e) => setNewsForm({ ...newsForm, excerpt: e.target.value })} required /></label>
+
+                  <label>{t.imageUrl}<input type="url" value={newsForm.imageUrl} onChange={(e) => setNewsForm({ ...newsForm, imageUrl: e.target.value })} placeholder="https://…" /></label>
+
+                  <label>{t.body}<textarea rows="6" value={newsForm.body} onChange={(e) => setNewsForm({ ...newsForm, body: e.target.value })} required /></label>
+
+                  <button className="primary-button" disabled={publishing}>{publishing ? t.loading : t.publish}</button>
+
+                </form>
+
+              </div>
+
+            )}
+
+            {loadingNews && !news.length ? <div className="loading-state">{t.loading}</div> :
+
+              filteredNews.length ? <div className="news-grid">{filteredNews.map((item) => <NewsCard key={item.id} item={item} onOpen={(post) => { setArticle(post); setSection("article"); }} canAdmin={adminAuthed} onDelete={deleteNews} />)}</div> :
+
+              <div className="empty-state"><span>▤</span><h3>{t.noNews}</h3><p>Use the publisher to post app releases, maintenance notices or football articles for your clients.</p></div>}
+
+          </section>
+
+        )}
+
       </main>
 
-      <nav className="bottom-nav" aria-label="Main navigation">
-        {NAV_ITEMS.map((item) => (
-          <button
-            key={item.id}
-            className={view === item.id ? "active" : ""}
-            onClick={() => {
-              setView(item.id);
-              setError("");
-              if (item.id === "news") loadNews();
-              if (item.id === "leagues") loadLeagues();
-              if (item.id === "live") loadLive();
-            }}
-          >
-            <span>{item.icon}</span>
-            <small>{item.label}</small>
-          </button>
-        ))}
-      </nav>
-    </div>
-  );
-}
 
-export default App;
+
+      {section === "match-detail" && matchDetail && (
+
+        <main className="main-wrap detail-wrap">
+
+          <button className="back-button" onClick={() => { setSection("matches"); setSelectedMatch(null); }}>← {t.close}</button>
+
+          <section className="panel">
+            <div className="match-centre-heading">
+              <p className="eyebrow">{matchDetail.competition?.name || "Match centre"}</p>
+              <div className="match-centre-tools">
+                <span className="muted">{matchDetailUpdatedAt ? `Updated ${matchDetailUpdatedAt.toLocaleTimeString()}` : "Match information"}</span>
+                <button className="secondary-button" onClick={refreshMatchDetails} disabled={matchDetailLoading}>{matchDetailLoading ? "Refreshing…" : "↻ Refresh details"}</button>
+              </div>
+            </div>
+            {matchDetailError && <div className="error-bar match-detail-error"><span>{matchDetailError}</span><button onClick={refreshMatchDetails} aria-label="Retry match details">Retry</button></div>}
+
+            <div className="detail-scoreboard">
+
+              <div className="detail-team"><img src={matchDetail.homeTeam?.crest || ""} alt="" onError={(e) => { e.currentTarget.style.visibility = "hidden"; }} /><strong>{matchDetail.homeTeam?.name}</strong></div>
+
+              <div className="detail-score"><strong>{matchScore(matchDetail, "home") ?? "–"} : {matchScore(matchDetail, "away") ?? "–"}</strong><span className={isLive(matchDetail) ? "live-label" : ""}>{statusText(matchDetail)}</span></div>
+
+              <div className="detail-team"><img src={matchDetail.awayTeam?.crest || ""} alt="" onError={(e) => { e.currentTarget.style.visibility = "hidden"; }} /><strong>{matchDetail.awayTeam?.name}</strong></div>
+
+            </div>
+
+            <div className="detail-tabs">{[["overview", t.overview], ["events", t.events], ["lineups", t.lineups], ["stats", t.stats]].map(([key, label]) => <button key={key} className={matchTab === key ? "active" : ""} onClick={() => setMatchTab(key)}>{label}</button>)}</div>
+
+            {matchTab === "overview" && <div className="detail-content">
+
+              <div className="info-grid"><div><small>Kick-off (your time)</small><strong>{new Date(matchDetail.utcDate).toLocaleString()}</strong></div><div><small>Venue</small><strong>{matchDetail.venue || "Not provided"}</strong></div><div><small>Referee</small><strong>{matchDetail.referees?.map((r) => r.name).join(", ") || "Not provided"}</strong></div><div><small>Matchday</small><strong>{matchDetail.matchday || matchDetail.stage || "—"}</strong></div></div>
+
+              <h3>Goal timeline</h3>
+
+              {matchGoals(matchDetail).length ? <div className="event-list">{matchGoals(matchDetail).map((goal, i) => <div className="event-row" key={i}><b>{goalMinute(goal)}</b><span>⚽</span><span>{goal.scorer?.name || "Unknown scorer"}{goalType(goal)}{goal.assist?.name ? ` · Assist: ${goal.assist.name}` : ""}</span><small>{goal.team?.name || ""}</small></div>)}</div> : <p className="muted">{t.noEvents}</p>}
+
+            </div>}
+
+            {matchTab === "events" && <div className="detail-content">
+
+              {matchEvents(matchDetail).length ? <div className="event-list">{matchEvents(matchDetail).map((event, i) => <div className="event-row" key={`${event.kind}-${i}`}><b>{event.minute != null ? `${event.minute}${event.injuryTime ? `+${event.injuryTime}` : ""}′` : "—"}</b><span>{event.icon}</span><span>{event.label}</span><small>{event.team}</small></div>)}</div> : <p className="muted">{t.noEvents}</p>}
+
+            </div>}
+
+            {matchTab === "lineups" && <div className="lineup-grid">
+
+              {[["home", matchDetail.homeTeam], ["away", matchDetail.awayTeam]].map(([side, team]) => {
+                const starters = Array.isArray(team?.lineup) ? team.lineup : (Array.isArray(matchDetail.lineups?.[side]) ? matchDetail.lineups[side] : []);
+                const bench = Array.isArray(team?.bench) ? team.bench : [];
+                return <div className="lineup-card" key={side}>
+                  <h3>{team?.name || side}</h3>
+                  <p className="lineup-meta">{team?.formation ? `Formation: ${team.formation}` : "Formation not provided"}</p>
+                  {team?.coach?.name && <p className="lineup-meta">Coach: {team.coach.name}</p>}
+                  <h4>Starting XI {starters.length ? `(${starters.length})` : ""}</h4>
+                  {starters.length ? starters.map((player, i) => <div className="player-row" key={player.id || `starter-${i}`}><span>{player.shirtNumber ?? player.number ?? "—"}</span><span>{player.name || player.player?.name || "Player"}</span><small>{player.position || ""}</small></div>) : <p className="muted">{t.noLineups}</p>}
+                  {bench.length > 0 && <><h4 className="bench-heading">Substitutes</h4>{bench.map((player, i) => <div className="player-row" key={player.id || `bench-${i}`}><span>{player.shirtNumber ?? player.number ?? "—"}</span><span>{player.name || player.player?.name || "Player"}</span><small>{player.position || ""}</small></div>)}</>}
+                </div>;
+              })}
+
+            </div>}
+
+            {matchTab === "stats" && <div className="detail-content">
+              {matchDetail.homeTeam?.statistics || matchDetail.awayTeam?.statistics ? <div className="stats-table">
+                <div className="stats-header"><strong>{matchDetail.homeTeam?.shortName || matchDetail.homeTeam?.name || "Home"}</strong><strong>Match statistics</strong><strong>{matchDetail.awayTeam?.shortName || matchDetail.awayTeam?.name || "Away"}</strong></div>
+                {Object.entries(STAT_LABELS).map(([key, label]) => {
+                  const homeValue = matchDetail.homeTeam?.statistics?.[key];
+                  const awayValue = matchDetail.awayTeam?.statistics?.[key];
+                  if (homeValue == null && awayValue == null) return null;
+                  return <div className="stats-row" key={key}><strong>{statDisplay(homeValue, key)}</strong><span>{label}</span><strong>{statDisplay(awayValue, key)}</strong></div>;
+                })}
+              </div> : <div className="unavailable-panel"><strong>Detailed statistics aren't included in this response.</strong><p className="muted">Detailed statistics are not available in the provider response for this fixture or competition. AG SOCCER only displays statistics returned by the data provider; it does not invent missing values.</p></div>}
+            </div>}
+
+          </section>
+
+        </main>
+
+      )}
+
+
+
+      {section === "league-detail" && selectedCompetition && (
+
+        <main className="main-wrap detail-wrap">
+
+          <button className="back-button" onClick={() => { setSection("leagues"); setSelectedCompetition(null); }}>← {t.close} {t.leagues}</button>
+
+          <section className="panel">
+
+            <div className="league-title"><img src={selectedCompetition.emblem || ""} alt="" onError={(e) => { e.currentTarget.style.display = "none"; }} /><div><p className="eyebrow">{selectedCompetition.area?.name || "Competition"}</p><h2>{selectedCompetition.name}</h2></div></div>
+
+            <div className="detail-tabs">{[["matches", t.leagueMatches], ["standings", t.standings], ["teams", t.teams], ["scorers", t.scorers]].map(([key, label]) => <button key={key} className={leagueTab === key ? "active" : ""} onClick={() => setLeagueTab(key)}>{label}</button>)}</div>
+
+            {!leagueData ? <div className="loading-state">{t.loading}</div> :
+
+              leagueTab === "matches" ? leagueData.matches.length ? <div className="match-grid">{leagueData.matches.map((m) => <MatchCard key={m.id} match={m} onOpen={openMatch} />)}</div> : <div className="empty-state"><p>No competition matches returned. This competition may not be included in your plan.</p></div> :
+
+              leagueTab === "standings" ? leagueData.standings.length ? leagueData.standings.map((table, i) => <div className="table-scroll" key={i}><h3>{table.group || table.type || "Table"}</h3><table><thead><tr><th>#</th><th>Team</th><th>MP</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>Pts</th></tr></thead><tbody>{(table.table || []).map((row) => <tr key={row.team.id}><td>{row.position}</td><td className="table-team">{row.team.crest && <img src={row.team.crest} alt="" />} {row.team.name}</td><td>{row.playedGames}</td><td>{row.won}</td><td>{row.draw}</td><td>{row.lost}</td><td>{row.goalDifference}</td><td><strong>{row.points}</strong></td></tr>)}</tbody></table></div>) : <p className="muted">{t.noStandings}</p> :
+
+              leagueTab === "teams" ? <div className="team-grid">{leagueData.teams.map((team) => <div className="team-tile" key={team.id}>{team.crest && <img src={team.crest} alt="" />}<span>{team.name}</span></div>)}</div> :
+
+              leagueData.scorers.length ? <div className="table-scroll"><table><thead><tr><th>#</th><th>Player</th><th>Team</th><th>Goals</th><th>Assists</th></tr></thead><tbody>{leagueData.scorers.map((s, i) => <tr key={s.player?.id || i}><td>{i + 1}</td><td>{s.player?.name}</td><td>{s.team?.name}</td><td>{s.goals ?? 0}</td><td>{s.assists ?? 0}</td></tr>)}</tbody></table></div> : <p className="muted">Top scorers unavailable for this competition.</p>}
+
+          </section>
+
+        </main>
+
+      )}
+
+
+
+      {section === "article" && article && (
+
+        <main className="main-wrap detail-wrap">
+
+          <button className="back-button" onClick={() => { setSection("news"); setArticle(null); }}>← {t.news}</button>
+
+          <article className="panel article-page">
+
+            {article.imageUrl && <img className="article-hero" src={article.imageUrl} alt="" />}
+
+            <span className="category-tag">{article.category || "News"}</span>
+
+            <h1>{article.title}</h1>
+
+            <p className="article-excerpt">{article.excerpt}</p>
+
+            <time className="muted">{t.published}: {new Date(article.publishedAt).toLocaleString()}</time>
+
+            <div className="article-body">{article.body}</div>
+
+          </article>
+
+        </main>
+
+      )}
+
+
+
+      <footer className="site-footer"><span>⚽ AG Football</span><span>Scores, schedules & updates</span><span>Data provided by football-data.org</span></footer>
+
+    </div>
+
+  );
+
+}
