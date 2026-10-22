@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 dotenv.config();
 
 const app = express();
-const PORT = Number(process.env.PORT || 5000);
+const PORT = Number(process.env.PORT || 1000);
 
 const API_BASE =
   process.env.API_FOOTBALL_BASE_URL ||
