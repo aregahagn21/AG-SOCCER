@@ -2,53 +2,55 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
 
 function getLiveMinute(match) {
-
-  // Use the official minute if the API provides one.
-
-  if (typeof match.minute === "number") {
-
-    return match.minute;
-
+  // Prefer the minute supplied by the provider.
+  const officialMinute = Number(match.minute);
+  if (
+    match.minute !== null &&
+    match.minute !== undefined &&
+    match.minute !== "" &&
+    Number.isFinite(officialMinute)
+  ) {
+    return Math.min(120, Math.max(0, officialMinute));
   }
 
-
-
-  // Estimate elapsed time only for matches marked as live.
-
-  if (match.status !== "IN_PLAY" || !match.utcDate) {
-
+  // Estimate only while the match is actively being played.
+  // A penalty shootout has no meaningful match-minute clock.
+  const status = String(match.status || "").toUpperCase();
+  if (!["IN_PLAY", "EXTRA_TIME", "LIVE"].includes(status) || !match.utcDate) {
     return null;
-
   }
-
-
 
   const kickoff = new Date(match.utcDate).getTime();
-
-  const now = Date.now();
-
-
-
-  if (!Number.isFinite(kickoff) || now < kickoff) {
-
+  if (!Number.isFinite(kickoff) || Date.now() < kickoff) {
     return null;
-
   }
 
-
-
-  return Math.floor((now - kickoff) / 60000);
-
+  // Clamp the estimate so the displayed clock never runs beyond 120 minutes.
+  // This is an estimate when the provider does not supply an official minute.
+  return Math.min(120, Math.floor((Date.now() - kickoff) / 60000));
 }
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || "http://localhost:5000").replace(/\/$/, "");
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
-const PRIORITY = ["CL", "PL", "PD", "BL1", "SA", "FL1", "EL", "PPL", "DED", "BSA"];
-const COMPETITION_PRIORITY = ["UEFA Champions League", "Champions League", "Premier League", "LaLiga", "Primera Division", "Bundesliga", "Serie A", "Ligue 1", "UEFA Europa League", "Europa League", "Primeira Liga", "Eredivisie", "Major League Soccer"];
+const PRIORITY = [
+  "uefa-champions-league", "premier-league", "la-liga", "bundesliga",
+  "serie-a", "ligue-1", "europa-league", "uefa-europa-conference-league",
+  "primeira-liga", "eredivisie", "english-premier-league", "spanish-la-liga",
+  "german-bundesliga", "italian-serie-a", "french-ligue-1", "uefa-europa-league",
+  "portuguese-primeira-liga", "dutch-eredivisie", "CL", "PL", "PD", "BL1", "SA", "FL1", "EL", "PPL", "DED", "BSA"
+];
+const COMPETITION_PRIORITY = [
+  "UEFA Champions League", "Champions League", "England Premier League", "Premier League",
+  "Spain La Liga", "La Liga", "Primera Division", "Germany Bundesliga", "Bundesliga",
+  "Italy Serie A", "Serie A", "France Ligue 1", "Ligue 1", "UEFA Europa League",
+  "UEFA Conference League", "Conference League", "Europa League", "Portugal Primeira Liga",
+  "Primeira Liga", "Netherlands Eredivisie", "Eredivisie", "Major League Soccer"
+];
 function competitionRank(match) {
-  const code = String(match.competition?.code || "").toUpperCase();
+  const code = String(match.competition?.code || "").toLowerCase();
+  const slug = String(match.competition?.slug || match.league?.slug || "").toLowerCase();
   const name = String(match.competition?.name || match.league?.name || "").toLowerCase();
-  const codeIndex = PRIORITY.indexOf(code);
+  const codeIndex = PRIORITY.indexOf(slug || code);
   if (codeIndex >= 0) return codeIndex;
   const nameIndex = COMPETITION_PRIORITY.findIndex((item) => name.includes(item.toLowerCase()));
   return nameIndex >= 0 ? nameIndex : 1000;
@@ -205,35 +207,37 @@ function formatDate(dateString, locale = "en") {
 }
 
 function statusText(match) {
-  if (match.status === "IN_PLAY") {
-    // Prefer the provider's official match minute whenever it is available.
-    if (typeof match.minute === "number") {
-      return match.injuryTime
-        ? `${match.minute}+${match.injuryTime}′`
-        : `${match.minute}′`;
+  const status = String(match.status || "").toUpperCase();
+
+  if (status === "IN_PLAY" || status === "LIVE") {
+    const minute = getLiveMinute(match);
+    if (minute === null) return "LIVE";
+
+    const injuryTime = Number(match.injuryTime || 0);
+    if (injuryTime > 0 && minute < 120) {
+      return `${minute}+${injuryTime}′`;
     }
 
-    // football-data.org may not return a live minute, so show an explicitly
-    // estimated elapsed time based on kickoff instead.
-    const estimatedMinute = getLiveMinute(match);
-    return estimatedMinute !== null ? `LIVE · ~${estimatedMinute}′` : "LIVE";
+    return typeof match.minute === "number" || (match.minute != null && match.minute !== "")
+      ? `${minute}′`
+      : `LIVE · ~${minute}′`;
   }
 
-  if (match.status === "PAUSED") return "HT";
-  if (match.status === "EXTRA_TIME" && match.minute != null) {
-    return `${match.minute}′ ET`;
+  if (status === "PAUSED") return "HT";
+
+  if (status === "EXTRA_TIME") {
+    const minute = getLiveMinute(match);
+    return minute === null ? "Extra time" : `${minute}′ ET`;
   }
 
-  return STATUS_LABELS[match.status] || match.status || "Scheduled";
+  if (status === "PENALTY_SHOOTOUT") return "Penalties";
+
+  return STATUS_LABELS[status] || match.status || "Scheduled";
 }
 
 function isLive(match) { return LIVE_STATUSES.has(match.status); }
 
-function matchGoals(match) {
-  if (Array.isArray(match?.goals) && match.goals.length) return match.goals;
-  const events = Array.isArray(match?.events) ? match.events : [];
-  return events.filter((event) => /goal|penalty_scored|own_goal/i.test(String(event.kind || event.type || event.eventType || ""))).map((event) => ({ ...event, scorer: event.scorer || event.player || event.actor, assist: event.assist || event.assistedBy, type: event.goalType || event.type }));
-}
+function matchGoals(match) { return Array.isArray(match.goals) ? match.goals : []; }
 
 function goalMinute(goal) {
 
@@ -313,9 +317,10 @@ function sortCompetitions(items) {
   return [...items].sort((a, b) => {
 
     const rank = (item) => {
-      const code = String(item.code || "").toUpperCase();
+      const code = String(item.code || "").toLowerCase();
+      const slug = String(item.slug || "").toLowerCase();
       const name = String(item.name || "").toLowerCase();
-      const codeRank = PRIORITY.indexOf(code);
+      const codeRank = PRIORITY.indexOf(slug || code);
       if (codeRank >= 0) return codeRank;
       const patterns = [
         /champions league/, /premier league/, /la liga|primera division/,
@@ -333,28 +338,85 @@ function sortCompetitions(items) {
 
 
 
-function matchScore(match, side) {
-  const key = side === "home" ? "home" : "away";
-  const score = match?.score || {};
-  const direct = score?.fullTime?.[key] ?? score?.current?.[key] ?? score?.[key] ?? score?.[`${key}Score`] ?? score?.halfTime?.[key];
-  if (direct !== undefined && direct !== null && direct !== "") return direct;
-  const goals = match?.goals;
-  if (Array.isArray(goals) && (match.status === "FINISHED" || isLive(match))) {
-    const teamId = match?.[`${key}Team`]?.id;
-    const teamName = match?.[`${key}Team`]?.name;
-    const ownGoals = goals.filter(g => String(g.team?.id ?? "") === String(teamId ?? "") || (!teamId && g.team?.name === teamName)).length;
-    if (teamId != null || teamName) return ownGoals;
+function getCompetitionTitle(match) {
+  const name = String(
+    match.competition?.name || match.league?.name || match.competition_name || "Other matches"
+  ).trim();
+
+  // Use one consistent heading for the English Premier League.
+  if (
+    /^(english\s+)?premier league$/i.test(name) ||
+    String(match.competition?.code || match.league?.code || "").toUpperCase() === "PL"
+  ) {
+    return "England Premier League";
   }
-  return null;
+
+  return name || "Other matches";
 }
 
-function MatchCard({ match, onOpen }) {
+function groupMatchesByCompetition(items) {
+  const groups = new Map();
+
+  for (const match of items || []) {
+    const title = getCompetitionTitle(match);
+    if (!groups.has(title)) {
+      groups.set(title, {
+        title,
+        emblem: match.competition?.emblem || match.league?.emblem || "",
+        representative: match,
+        matches: [],
+      });
+    }
+    groups.get(title).matches.push(match);
+  }
+
+  return [...groups.values()].sort((a, b) => {
+    return competitionRank(a.representative) - competitionRank(b.representative) ||
+      a.title.localeCompare(b.title);
+  });
+}
+
+function CompetitionMatchGroups({ matches, onOpen }) {
+  const groups = groupMatchesByCompetition(matches);
+
+  return (
+    <div className="competition-match-groups">
+      {groups.map((group) => (
+        <section className="competition-match-group" key={group.title}>
+          <h3 className="competition-match-heading">
+            {group.emblem && (
+              <img
+                src={group.emblem}
+                alt=""
+                onError={(event) => { event.currentTarget.style.display = "none"; }}
+              />
+            )}
+            <span>{group.title}</span>
+            <small>{group.matches.length} {group.matches.length === 1 ? "match" : "matches"}</small>
+          </h3>
+          <div className="match-grid">
+            {group.matches.map((match, index) => (
+              <MatchCard
+                key={match.id ?? match.slug ?? `${group.title}-${index}`}
+                match={match}
+                onOpen={onOpen}
+                showCompetition={false}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function MatchCard({ match, onOpen, showCompetition = true }) {
 
   const goals = matchGoals(match);
 
-  const homeScore = matchScore(match, "home");
+  const homeScore = match.score?.fullTime?.home ?? match.score?.halfTime?.home;
 
-  const awayScore = matchScore(match, "away");
+  const awayScore = match.score?.fullTime?.away ?? match.score?.halfTime?.away;
 
   const homeName = match.homeTeam?.shortName || match.homeTeam?.name || "Home";
 
@@ -366,13 +428,15 @@ function MatchCard({ match, onOpen }) {
 
       <div className="match-meta">
 
-        <span className="competition-label">
+        {showCompetition && (
+          <span className="competition-label">
 
-          {match.competition?.emblem && <img src={match.competition.emblem} alt="" onError={(e) => { e.currentTarget.style.display = "none"; }} />}
+            {match.competition?.emblem && <img src={match.competition.emblem} alt="" onError={(e) => { e.currentTarget.style.display = "none"; }} />}
 
-          {match.competition?.name || "Competition"}
+            {getCompetitionTitle(match)}
 
-        </span>
+          </span>
+        )}
 
         <span className={`status-pill ${isLive(match) ? "status-live" : ""}`}>
 
@@ -522,6 +586,12 @@ export default function App() {
 
   const [matchDetail, setMatchDetail] = useState(null);
 
+  const [matchDetailError, setMatchDetailError] = useState("");
+
+  const [matchDetailLoading, setMatchDetailLoading] = useState(false);
+
+  const [matchDetailUpdatedAt, setMatchDetailUpdatedAt] = useState(null);
+
   const [matchTab, setMatchTab] = useState("overview");
 
   const [leagueTab, setLeagueTab] = useState("matches");
@@ -610,7 +680,7 @@ export default function App() {
       const rows = data.competitions || data.leagues || data.data?.competitions || data.data?.leagues || data.data?.data?.leagues || [];
       setCompetitions(sortCompetitions(Array.isArray(rows) ? rows : []));
       if (!Array.isArray(rows) || rows.length === 0) {
-        setError("The football provider returned no competitions. Check /api/test and your Highlightly plan.");
+        setError("SportScore returned no competitions for this request. Check the backend /api/leagues response and the SportScore search result.");
       }
 
     } catch (e) { setError(e.message); }
@@ -673,7 +743,7 @@ export default function App() {
     setMatchDetailLoading(true);
     setSection("match-detail");
     try {
-      const data = await api(`/api/matches/${match.id}`);
+      const data = await api(`/api/matches/${encodeURIComponent(match.slug || match.id)}`);
       setMatchDetail(data.match || match);
       setMatchDetailUpdatedAt(new Date());
     } catch (error) {
@@ -689,7 +759,7 @@ export default function App() {
     setMatchDetailLoading(true);
     setMatchDetailError("");
     try {
-      const data = await api(`/api/matches/${selectedMatch.id}`);
+      const data = await api(`/api/matches/${encodeURIComponent(selectedMatch.slug || selectedMatch.id)}`);
       setMatchDetail(data.match || matchDetail || selectedMatch);
       setMatchDetailUpdatedAt(new Date());
     } catch (error) {
@@ -705,7 +775,7 @@ export default function App() {
     if (section !== "match-detail" || !selectedMatch?.id || !isLive(matchDetail || selectedMatch)) return;
     const timer = window.setInterval(async () => {
       try {
-        const data = await api(`/api/matches/${selectedMatch.id}`);
+        const data = await api(`/api/matches/${encodeURIComponent(selectedMatch.slug || selectedMatch.id)}`);
         const updated = data.match || null;
         if (updated) {
           setMatchDetail(updated);
@@ -733,13 +803,13 @@ export default function App() {
 
       const [matchResponse, standingsResponse, teamsResponse, scorersResponse] = await Promise.allSettled([
 
-        api(`/api/leagues/${encodeURIComponent(competition.code)}/matches`),
+        api(`/api/leagues/${encodeURIComponent(competition.slug || competition.code || competition.id)}/matches`),
 
-        api(`/api/leagues/${encodeURIComponent(competition.code)}/standings`),
+        api(`/api/leagues/${encodeURIComponent(competition.slug || competition.code || competition.id)}/standings`),
 
-        api(`/api/leagues/${encodeURIComponent(competition.code)}/teams`),
+        api(`/api/leagues/${encodeURIComponent(competition.slug || competition.code || competition.id)}/teams`),
 
-        api(`/api/leagues/${encodeURIComponent(competition.code)}/scorers`),
+        api(`/api/leagues/${encodeURIComponent(competition.slug || competition.code || competition.id)}/scorers`),
 
       ]);
 
@@ -1013,7 +1083,7 @@ export default function App() {
 
             {loadingMatches ? <div className="loading-state">{t.loading}</div> :
 
-              filteredMatches.length ? <div className="match-grid">{filteredMatches.map((match) => <MatchCard key={match.id} match={match} onOpen={openMatch} />)}</div> :
+              filteredMatches.length ? <CompetitionMatchGroups matches={filteredMatches} onOpen={openMatch} /> :
 
               <div className="empty-state"><span>⚽</span><h3>{t.noMatches}</h3><p>Try another date or open a competition to view its full schedule.</p><button className="secondary-button" onClick={() => loadMatches()}>{t.retry}</button></div>}
 
@@ -1031,9 +1101,12 @@ export default function App() {
 
             {loadingLive && !liveMatches.length ? <div className="loading-state">{t.loading}</div> :
 
-              liveMatches.filter((m) => !search || `${m.homeTeam?.name} ${m.awayTeam?.name} ${m.competition?.name}`.toLowerCase().includes(search.toLowerCase())).length ?
+              liveMatches.filter((m) => !search || `${m.homeTeam?.name} ${m.awayTeam?.name} ${getCompetitionTitle(m)}`.toLowerCase().includes(search.toLowerCase())).length ?
 
-                <div className="match-grid">{liveMatches.filter((m) => !search || `${m.homeTeam?.name} ${m.awayTeam?.name} ${m.competition?.name}`.toLowerCase().includes(search.toLowerCase())).map((match) => <MatchCard key={match.id} match={match} onOpen={openMatch} />)}</div> :
+                <CompetitionMatchGroups
+                  matches={liveMatches.filter((m) => !search || `${m.homeTeam?.name} ${m.awayTeam?.name} ${getCompetitionTitle(m)}`.toLowerCase().includes(search.toLowerCase()))}
+                  onOpen={openMatch}
+                /> :
 
                 <div className="empty-state"><span>◷</span><h3>No live games found right now</h3><p>The scoreboard refreshes automatically every two minutes. Availability depends on your data provider plan.</p><button className="secondary-button" onClick={loadLive}>{t.refresh}</button></div>}
 
@@ -1059,7 +1132,7 @@ export default function App() {
 
               </button>)}</div> :
 
-              <div className="empty-state"><h3>No competitions available</h3><p>Check your API token and football-data.org plan.</p><button className="secondary-button" onClick={loadLeagues}>{t.retry}</button></div>}
+              <div className="empty-state"><h3>No competitions available</h3><p>Check the backend /api/leagues response and your SportScore API response.</p><button className="secondary-button" onClick={loadLeagues}>{t.retry}</button></div>}
 
           </section>
 
@@ -1137,7 +1210,7 @@ export default function App() {
 
               <div className="detail-team"><img src={matchDetail.homeTeam?.crest || ""} alt="" onError={(e) => { e.currentTarget.style.visibility = "hidden"; }} /><strong>{matchDetail.homeTeam?.name}</strong></div>
 
-              <div className="detail-score"><strong>{matchScore(matchDetail, "home") ?? "–"} : {matchScore(matchDetail, "away") ?? "–"}</strong><span className={isLive(matchDetail) ? "live-label" : ""}>{statusText(matchDetail)}</span></div>
+              <div className="detail-score"><strong>{matchDetail.score?.fullTime?.home ?? matchDetail.score?.halfTime?.home ?? "–"} : {matchDetail.score?.fullTime?.away ?? matchDetail.score?.halfTime?.away ?? "–"}</strong><span className={isLive(matchDetail) ? "live-label" : ""}>{statusText(matchDetail)}</span></div>
 
               <div className="detail-team"><img src={matchDetail.awayTeam?.crest || ""} alt="" onError={(e) => { e.currentTarget.style.visibility = "hidden"; }} /><strong>{matchDetail.awayTeam?.name}</strong></div>
 
@@ -1187,7 +1260,7 @@ export default function App() {
                   if (homeValue == null && awayValue == null) return null;
                   return <div className="stats-row" key={key}><strong>{statDisplay(homeValue, key)}</strong><span>{label}</span><strong>{statDisplay(awayValue, key)}</strong></div>;
                 })}
-              </div> : <div className="unavailable-panel"><strong>Detailed statistics aren't included in this response.</strong><p className="muted">Detailed statistics are not available in the provider response for this fixture or competition. AG SOCCER only displays statistics returned by the data provider; it does not invent missing values.</p></div>}
+              </div> : <div className="unavailable-panel"><strong>Detailed statistics aren't included in this response.</strong><p className="muted">The current match response does not include the shots and possession fields this table needs. The app will not invent statistics; the backend must provide these fields to fill this tab.</p></div>}
             </div>}
 
           </section>
@@ -1209,10 +1282,11 @@ export default function App() {
             <div className="league-title"><img src={selectedCompetition.emblem || ""} alt="" onError={(e) => { e.currentTarget.style.display = "none"; }} /><div><p className="eyebrow">{selectedCompetition.area?.name || "Competition"}</p><h2>{selectedCompetition.name}</h2></div></div>
 
             <div className="detail-tabs">{[["matches", t.leagueMatches], ["standings", t.standings], ["teams", t.teams], ["scorers", t.scorers]].map(([key, label]) => <button key={key} className={leagueTab === key ? "active" : ""} onClick={() => setLeagueTab(key)}>{label}</button>)}</div>
+            {leagueData?.errors?.some(Boolean) && <div className="error-bar league-data-errors"><div><strong>Some competition data could not be loaded.</strong><ul>{leagueData.errors.filter(Boolean).map((message, i) => <li key={`${i}-${message}`}>{message}</li>)}</ul></div></div>}
 
             {!leagueData ? <div className="loading-state">{t.loading}</div> :
 
-              leagueTab === "matches" ? leagueData.matches.length ? <div className="match-grid">{leagueData.matches.map((m) => <MatchCard key={m.id} match={m} onOpen={openMatch} />)}</div> : <div className="empty-state"><p>No competition matches returned. This competition may not be included in your plan.</p></div> :
+              leagueTab === "matches" ? leagueData.matches.length ? <div className="match-grid">{leagueData.matches.map((m, index) => <MatchCard key={m.id ?? m.slug ?? index} match={m} onOpen={openMatch} showCompetition={false} />)}</div> : <div className="empty-state"><p>No competition matches returned. This competition may not be included in your plan.</p></div> :
 
               leagueTab === "standings" ? leagueData.standings.length ? leagueData.standings.map((table, i) => <div className="table-scroll" key={i}><h3>{table.group || table.type || "Table"}</h3><table><thead><tr><th>#</th><th>Team</th><th>MP</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>Pts</th></tr></thead><tbody>{(table.table || []).map((row) => <tr key={row.team.id}><td>{row.position}</td><td className="table-team">{row.team.crest && <img src={row.team.crest} alt="" />} {row.team.name}</td><td>{row.playedGames}</td><td>{row.won}</td><td>{row.draw}</td><td>{row.lost}</td><td>{row.goalDifference}</td><td><strong>{row.points}</strong></td></tr>)}</tbody></table></div>) : <p className="muted">{t.noStandings}</p> :
 
@@ -1256,7 +1330,7 @@ export default function App() {
 
 
 
-      <footer className="site-footer"><span>⚽ AG Football</span><span>Scores, schedules & updates</span><span>Data provided by football-data.org</span></footer>
+      <footer className="site-footer"><span>⚽ AG Football</span><span>Scores, schedules & updates</span><a href="https://sportscore.com/" target="_blank" rel="noreferrer">Powered by SportScore</a></footer>
 
     </div>
 
